@@ -1,7 +1,7 @@
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 import random
 import asyncio
 from typing import Optional, List, Dict
@@ -11,7 +11,7 @@ class GamblingView(discord.ui.View):
     def __init__(self, host_id: int, bet_amount: int, max_players: int = 10):
         super().__init__(timeout=60)
         self.host_id = host_id
-        self.players = {host_id: bet_amount}  # {user_id: bet_amount}
+        self.players = {host_id: bet_amount}
         self.max_players = max_players
         self.started = False
         
@@ -68,13 +68,11 @@ class BetModal(discord.ui.Modal):
                 await interaction.response.send_message("❌ Minimum bet is 10 points!", ephemeral=True)
                 return
                 
-            # Check user points
             user_data = await interaction.client.get_cog("EventsCog").db.users.find_one({"user_id": interaction.user.id})
             if not user_data or user_data.get("points", 0) < bet_amount:
                 await interaction.response.send_message("❌ Insufficient points!", ephemeral=True)
                 return
             
-            # Deduct points and add to game
             await interaction.client.get_cog("EventsCog").db.users.update_one(
                 {"user_id": interaction.user.id},
                 {"$inc": {"points": -bet_amount}}
@@ -82,7 +80,6 @@ class BetModal(discord.ui.Modal):
             
             self.view.players[interaction.user.id] = bet_amount
             
-            # Update embed
             embed = interaction.message.embeds[0]
             total_pot = sum(self.view.players.values())
             embed.set_field_at(0, name="💰 Total Pot", value=f"**{total_pot}** points", inline=True)
@@ -158,13 +155,11 @@ class EventsCog(commands.Cog):
                 return
             
             if mode == "solo":
-                # Solo gambling - instant result
                 await self.db.users.update_one(
                     {"user_id": ctx.author.id},
                     {"$inc": {"points": -bet}}
                 )
                 
-                # Roll the dice
                 roll = random.randint(1, 100)
                 won = roll <= win_percentage
                 
@@ -194,8 +189,7 @@ class EventsCog(commands.Cog):
                 
                 await ctx.send(embed=embed)
                 
-            else:  # Group mode
-                # Deduct initial bet
+            else:
                 await self.db.users.update_one(
                     {"user_id": ctx.author.id},
                     {"$inc": {"points": -bet}}
@@ -218,7 +212,6 @@ class EventsCog(commands.Cog):
                 await view.wait()
                 
                 if not view.started or len(view.players) < 2:
-                    # Refund if not started
                     for uid, amount in view.players.items():
                         await self.db.users.update_one(
                             {"user_id": uid},
@@ -233,14 +226,11 @@ class EventsCog(commands.Cog):
                     await message.edit(embed=embed, view=None)
                     return
                 
-                # Calculate winner
                 total_pot = sum(view.players.values())
                 players = list(view.players.keys())
                 
-                # Roll for winner
                 roll = random.randint(1, 100)
                 if roll <= win_percentage:
-                    # Someone wins
                     winner_id = random.choice(players)
                     winner = self.bot.get_user(winner_id)
                     
@@ -258,7 +248,6 @@ class EventsCog(commands.Cog):
                     embed.add_field(name="💰 Prize", value=f"**{total_pot}** points", inline=True)
                     embed.add_field(name="👥 Players", value=len(players), inline=True)
                 else:
-                    # House wins
                     embed = discord.Embed(
                         title="🎰 Group Gamble - House Wins!",
                         description="No winner this time! All bets lost.",
@@ -306,7 +295,6 @@ class EventsCog(commands.Cog):
             
             await asyncio.sleep(duration)
             
-            # Get participants
             message = await ctx.channel.fetch_message(message.id)
             reaction = None
             for r in message.reactions:
@@ -333,7 +321,6 @@ class EventsCog(commands.Cog):
             
             selected_winners = random.sample(participants, winners)
             
-            # Give prizes
             for winner in selected_winners:
                 await self.db.users.update_one(
                     {"user_id": winner.id},
@@ -390,7 +377,6 @@ class EventsCog(commands.Cog):
             
             await asyncio.sleep(duration)
             
-            # Disable buttons
             for item in view.children:
                 item.disabled = True
             await message.edit(view=view)
@@ -404,16 +390,14 @@ class EventsCog(commands.Cog):
                 await message.edit(embed=embed, view=None)
                 return
             
-            # Select winners
             if mode == "first":
                 selected_winners = view.participants[:winners]
-            else:  # random
+            else:
                 if len(view.participants) <= winners:
                     selected_winners = view.participants
                 else:
                     selected_winners = random.sample(view.participants, winners)
             
-            # Give prizes
             for winner_id in selected_winners:
                 await self.db.users.update_one(
                     {"user_id": winner_id},
@@ -449,7 +433,6 @@ class EventsCog(commands.Cog):
                 await ctx.send("❌ Owner only command!", ephemeral=True)
                 return
             
-            # Get online members (excluding bots)
             online_members = [m for m in ctx.guild.members if not m.bot and m.status != discord.Status.offline]
             
             if len(online_members) < users:
@@ -469,7 +452,6 @@ class EventsCog(commands.Cog):
                 timestamp=datetime.now(timezone.utc)
             )
             
-            # Give points
             winner_list = []
             for user in selected_users:
                 await self.db.users.update_one(
@@ -537,7 +519,6 @@ class EventsCog(commands.Cog):
                 )
                 blessed_list.append(user.mention)
                 
-                # Try to DM them
                 try:
                     dm_embed = discord.Embed(
                         title="✨ You've Been Blessed!",
@@ -570,7 +551,6 @@ class EventsCog(commands.Cog):
                 await ctx.send("❌ You can buy 1-10 tickets!", ephemeral=True)
                 return
             
-            # Get lottery config
             lottery_config = await self.db.lottery.find_one({"active": True})
             if not lottery_config:
                 await ctx.send("❌ No active lottery!", ephemeral=True)
@@ -584,13 +564,11 @@ class EventsCog(commands.Cog):
                 await ctx.send(f"❌ You need **{total_cost}** points for {tickets} tickets!", ephemeral=True)
                 return
             
-            # Check if user already has tickets
             user_tickets = lottery_config.get("participants", {}).get(str(ctx.author.id), 0)
             if user_tickets + tickets > 10:
                 await ctx.send(f"❌ You can only have up to 10 tickets! You have {user_tickets}.", ephemeral=True)
                 return
             
-            # Deduct points and add tickets
             await self.db.users.update_one(
                 {"user_id": ctx.author.id},
                 {"$inc": {"points": -total_cost}}
@@ -634,7 +612,6 @@ class EventsCog(commands.Cog):
                 await ctx.send("❌ Owner only command!", ephemeral=True)
                 return
             
-            # Check if lottery already active
             active = await self.db.lottery.find_one({"active": True})
             if active:
                 await ctx.send("❌ Lottery already active!", ephemeral=True)
@@ -671,7 +648,6 @@ class EventsCog(commands.Cog):
             
             await ctx.send(embed=embed)
             
-            # Schedule draw
             await asyncio.sleep(duration_hours * 3600)
             await self.draw_lottery()
             
@@ -680,7 +656,6 @@ class EventsCog(commands.Cog):
             await ctx.send("❌ An error occurred!", ephemeral=True)
 
     async def draw_lottery(self):
-        """Draw the lottery winner"""
         try:
             lottery = await self.db.lottery.find_one({"active": True})
             if not lottery:
@@ -688,37 +663,31 @@ class EventsCog(commands.Cog):
             
             participants = lottery.get("participants", {})
             if not participants:
-                # No participants, deactivate
                 await self.db.lottery.update_one(
                     {"active": True},
                     {"$set": {"active": False}}
                 )
                 return
             
-            # Create ticket pool
             ticket_pool = []
             for user_id, tickets in participants.items():
                 ticket_pool.extend([user_id] * tickets)
             
-            # Draw winner
             winner_id = random.choice(ticket_pool)
             winner = self.bot.get_user(int(winner_id))
             
             prize_pool = lottery["prize_pool"]
             
-            # Give prize
             await self.db.users.update_one(
                 {"user_id": int(winner_id)},
                 {"$inc": {"points": prize_pool}}
             )
             
-            # Deactivate lottery
             await self.db.lottery.update_one(
                 {"active": True},
                 {"$set": {"active": False, "winner": winner_id}}
             )
             
-            # Announce winner
             channel = self.bot.get_channel(lottery["channel_id"])
             if channel:
                 embed = discord.Embed(
@@ -733,7 +702,6 @@ class EventsCog(commands.Cog):
                 
                 await channel.send(embed=embed)
                 
-                # DM winner
                 if winner:
                     try:
                         dm_embed = discord.Embed(
