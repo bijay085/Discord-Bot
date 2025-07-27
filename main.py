@@ -20,7 +20,8 @@ class CookieBot(commands.Bot):
                 type=discord.ActivityType.watching,
                 name="🍪 /help | Cookie Store"
             ),
-            status=discord.Status.online
+            status=discord.Status.online,
+            help_command=None
         )
         self.session = None
         self.start_time = datetime.now(timezone.utc)
@@ -45,7 +46,7 @@ class CookieBot(commands.Bot):
     async def load_extensions(self):
         cogs = [
             "cogs.cookie",
-            "cogs.points", 
+            "cogs.points",
             "cogs.admin",
             "cogs.invite",
             "cogs.directory",
