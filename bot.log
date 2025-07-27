@@ -48,3 +48,19 @@
 2025-07-28 01:06:38,790 - CookieBot - INFO - Connected to 2 servers
 2025-07-28 01:06:39,476 - CookieBot - INFO - Synced 21 slash commands
 2025-07-28 01:07:45,213 - CookieBot - ERROR - Unhandled error: Hybrid command raised an error: Command 'stats' raised an exception: AttributeError: 'CookieBot' object has no attribute 'process'
+2025-07-28 01:09:30,393 - CookieBot - INFO - Setting up bot...
+2025-07-28 01:09:30,393 - CookieBot - INFO - Connecting to MongoDB...
+2025-07-28 01:09:30,393 - CookieBot - INFO - Database: discord_bot
+2025-07-28 01:09:30,398 - CookieBot - INFO - MongoDB client created, testing connection...
+2025-07-28 01:09:31,424 - CookieBot - INFO - Successfully connected to MongoDB!
+2025-07-28 01:09:31,425 - CookieBot - INFO - Loading cogs...
+2025-07-28 01:09:31,451 - CookieBot - INFO - Loaded cog: cogs.cookie
+2025-07-28 01:09:31,465 - CookieBot - INFO - Loaded cog: cogs.points
+2025-07-28 01:09:31,480 - CookieBot - INFO - Loaded cog: cogs.admin
+2025-07-28 01:09:31,482 - CookieBot - INFO - Loaded cog: cogs.invite
+2025-07-28 01:09:31,484 - CookieBot - INFO - Loaded cog: cogs.directory
+2025-07-28 01:09:31,484 - CookieBot - INFO - Setup complete!
+2025-07-28 01:09:32,303 - discord.gateway - INFO - Shard ID None has connected to Gateway (Session ID: 767be594729b8c86802b46c592e6efad).
+2025-07-28 01:09:34,380 - CookieBot - INFO - Bot logged in as Bubble#7413 (ID: 1399008760479092859)
+2025-07-28 01:09:34,380 - CookieBot - INFO - Connected to 2 servers
+2025-07-28 01:09:34,977 - CookieBot - INFO - Synced 21 slash commands
