@@ -294,7 +294,7 @@ class CookieBot(commands.Bot):
             "cogs.invite",
             "cogs.directory",
             "cogs.analytics",
-            "cogs.help"
+            "cogs.events"
         ]
         
         loaded = 0
@@ -709,22 +709,6 @@ class CookieBot(commands.Bot):
         logger.info("✅ Shutdown complete")
     
     def get_uptime(self):
-        delta = datetime.now(timezone.utc) - self.start_time
-        hours, remainder = divmod(int(delta.total_seconds()), 3600)
-        minutes, seconds = divmod(remainder, 60)
-        days, hours = divmod(hours, 24)
-        
-        parts = []
-        if days:
-            parts.append(f"{days}d")
-        if hours:
-            parts.append(f"{hours}h")
-        if minutes:
-            parts.append(f"{minutes}m")
-        if seconds or not parts:
-            parts.append(f"{seconds}s")
-            
-        return " ".join(parts)
         delta = datetime.now(timezone.utc) - self.start_time
         hours, remainder = divmod(int(delta.total_seconds()), 3600)
         minutes, seconds = divmod(remainder, 60)

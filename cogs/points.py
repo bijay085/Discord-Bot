@@ -61,7 +61,12 @@ class PointsCog(commands.Cog):
             user_data = await self.get_or_create_user(ctx.author.id, str(ctx.author))
             
             if user_data.get("daily_claimed"):
-                time_passed = datetime.now(timezone.utc) - user_data["daily_claimed"]
+                daily_claimed = user_data["daily_claimed"]
+                # Ensure daily_claimed is timezone-aware
+                if daily_claimed.tzinfo is None:
+                    daily_claimed = daily_claimed.replace(tzinfo=timezone.utc)
+                
+                time_passed = datetime.now(timezone.utc) - daily_claimed
                 if time_passed < timedelta(hours=24):
                     remaining = timedelta(hours=24) - time_passed
                     hours = int(remaining.total_seconds() // 3600)
@@ -73,7 +78,7 @@ class PointsCog(commands.Cog):
                         color=discord.Color.orange()
                     )
                     embed.add_field(name="Time Remaining", value=f"**{hours}h {minutes}m**", inline=True)
-                    embed.add_field(name="Next Claim", value=f"<t:{int((user_data['daily_claimed'] + timedelta(hours=24)).timestamp())}:R>", inline=True)
+                    embed.add_field(name="Next Claim", value=f"<t:{int((daily_claimed + timedelta(hours=24)).timestamp())}:R>", inline=True)
                     embed.set_footer(text="Come back tomorrow!")
                     
                     await ctx.send(embed=embed, ephemeral=True)
@@ -150,11 +155,17 @@ class PointsCog(commands.Cog):
                     fav_text = "\n".join([f"{idx+1}. **{cookie}**: {count}" for idx, (cookie, count) in enumerate(top_cookies)])
                     embed.add_field(name="🍪 Favorite Cookies", value=fav_text, inline=False)
             
-            embed.set_footer(text=f"Account created: {user_data['account_created'].strftime('%B %d, %Y')}")
+            account_created = user_data.get('account_created', user_data.get('first_seen', datetime.now(timezone.utc)))
+            if isinstance(account_created, datetime):
+                embed.set_footer(text=f"Account created: {account_created.strftime('%B %d, %Y')}")
+            else:
+                embed.set_footer(text="Account created: Unknown")
             
             await ctx.send(embed=embed, ephemeral=True)
         except Exception as e:
             print(f"Error in points command: {e}")
+            import traceback
+            print(traceback.format_exc())
             await ctx.send("❌ An error occurred!", ephemeral=True)
     
     @commands.hybrid_command(name="getpoints", description="Ways to earn points")
@@ -355,6 +366,52 @@ class PointsCog(commands.Cog):
         except Exception as e:
             print(f"Error in help command: {e}")
             await ctx.send("❌ An error occurred!", ephemeral=True)
+
+    @commands.hybrid_command(name="fixusers", description="Fix missing user fields (Admin only)")
+    @commands.has_permissions(administrator=True)
+    async def fixusers(self, ctx):
+        try:
+            await ctx.defer()
+            
+            fixed_count = 0
+            async for user in self.db.users.find():
+                update_fields = {}
+                
+                # Check and add missing fields
+                if 'points' not in user:
+                    update_fields['points'] = 0
+                if 'total_earned' not in user:
+                    update_fields['total_earned'] = user.get('points', 0)
+                if 'total_spent' not in user:
+                    update_fields['total_spent'] = 0
+                if 'trust_score' not in user:
+                    update_fields['trust_score'] = 50
+                if 'account_created' not in user:
+                    update_fields['account_created'] = user.get('first_seen', datetime.now(timezone.utc))
+                if 'total_claims' not in user:
+                    update_fields['total_claims'] = 0
+                if 'weekly_claims' not in user:
+                    update_fields['weekly_claims'] = 0
+                if 'cookie_claims' not in user:
+                    update_fields['cookie_claims'] = {}
+                
+                if update_fields:
+                    await self.db.users.update_one(
+                        {"user_id": user["user_id"]},
+                        {"$set": update_fields}
+                    )
+                    fixed_count += 1
+            
+            embed = discord.Embed(
+                title="✅ User Data Fixed",
+                description=f"Updated **{fixed_count}** users with missing fields",
+                color=discord.Color.green()
+            )
+            await ctx.send(embed=embed)
+            
+        except Exception as e:
+            print(f"Error in fixusers command: {e}")
+            await ctx.send("❌ An error occurred while fixing user data!", ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(PointsCog(bot))
