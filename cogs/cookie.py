@@ -1,5 +1,3 @@
-# cogs/cookie.py
-
 import discord
 from discord.ext import commands, tasks
 import os
@@ -175,7 +173,26 @@ class CookieCog(commands.Cog):
         except Exception as e:
             print(f"Error in feedback check: {e}")
 
+    async def cookie_autocomplete(self, interaction: discord.Interaction, current: str):
+        server = await self.db.servers.find_one({"server_id": interaction.guild.id})
+        if not server:
+            return []
+        
+        choices = []
+        for cookie_type, config in server.get("cookies", {}).items():
+            if config.get("enabled", True):
+                if current.lower() in cookie_type.lower():
+                    cost = await self.get_user_cost(interaction.user, server, cookie_type)
+                    cooldown = await self.get_user_cooldown(interaction.user, server, cookie_type)
+                    choices.append(discord.app_commands.Choice(
+                        name=f"{cookie_type.title()} - {cost} points ({cooldown}h cooldown)",
+                        value=cookie_type
+                    ))
+        
+        return choices[:25]
+
     @commands.hybrid_command(name="cookie", description="Claim a cookie")
+    @discord.app_commands.autocomplete(type=cookie_autocomplete)
     async def cookie(self, ctx, type: str):
         try:
             if not await self.check_maintenance(ctx):
@@ -203,7 +220,17 @@ class CookieCog(commands.Cog):
             type = type.lower()
             if type not in server["cookies"]:
                 available = [c for c, cfg in server["cookies"].items() if cfg.get("enabled", True)]
-                await ctx.send(f"❌ Invalid cookie type!\nAvailable: `{', '.join(available)}`", ephemeral=True)
+                embed = discord.Embed(
+                    title="❌ Invalid Cookie Type",
+                    description="Please select a valid cookie type using the autocomplete menu!",
+                    color=discord.Color.red()
+                )
+                embed.add_field(
+                    name="Available Cookies",
+                    value="\n".join([f"• **{c}**" for c in available[:10]]),
+                    inline=False
+                )
+                await ctx.send(embed=embed, ephemeral=True)
                 return
             
             cookie_config = server["cookies"][type]
@@ -313,8 +340,26 @@ class CookieCog(commands.Cog):
             print(f"Error in cookie command: {traceback.format_exc()}")
             await ctx.send("❌ An error occurred! Please try again or contact support.", ephemeral=True)
 
+    async def stock_autocomplete(self, interaction: discord.Interaction, current: str):
+        server = await self.db.servers.find_one({"server_id": interaction.guild.id})
+        if not server:
+            return []
+        
+        choices = [discord.app_commands.Choice(name="All Cookies", value="all")]
+        
+        for cookie_type, config in server.get("cookies", {}).items():
+            if config.get("enabled", True):
+                if current.lower() in cookie_type.lower():
+                    choices.append(discord.app_commands.Choice(
+                        name=cookie_type.title(),
+                        value=cookie_type
+                    ))
+        
+        return choices[:25]
+
     @commands.hybrid_command(name="stock", description="Check cookie stock")
-    async def stock(self, ctx, type: str = None):
+    @discord.app_commands.autocomplete(type=stock_autocomplete)
+    async def stock(self, ctx, type: str = "all"):
         try:
             server = await self.db.servers.find_one({"server_id": ctx.guild.id})
             if not server:
@@ -327,7 +372,7 @@ class CookieCog(commands.Cog):
                 timestamp=datetime.now(timezone.utc)
             )
             
-            if type:
+            if type != "all":
                 type = type.lower()
                 if type not in server["cookies"]:
                     await ctx.send("❌ Invalid cookie type!", ephemeral=True)
@@ -341,9 +386,12 @@ class CookieCog(commands.Cog):
                     count = len(files)
                     status = "✅ Available" if count > 0 else "❌ Out of Stock"
                     
+                    cost = await self.get_user_cost(ctx.author, server, type)
+                    cooldown = await self.get_user_cooldown(ctx.author, server, type)
+                    
                     embed.add_field(
                         name=f"{type.title()}",
-                        value=f"Stock: **{count}** files\nStatus: {status}\nCost: **{cookie_config['cost']}** points",
+                        value=f"Stock: **{count}** files\nStatus: {status}\nYour Cost: **{cost}** points\nYour Cooldown: **{cooldown}** hours",
                         inline=False
                     )
                 else:
@@ -358,11 +406,16 @@ class CookieCog(commands.Cog):
                         files = [f for f in os.listdir(directory) if f.endswith('.txt')]
                         count = len(files)
                         emoji = "✅" if count > 10 else "⚠️" if count > 0 else "❌"
+                        
+                        cost = await self.get_user_cost(ctx.author, server, cookie_type)
+                        
                         embed.add_field(
                             name=cookie_type.title(),
-                            value=f"{emoji} **{count}** files",
+                            value=f"{emoji} **{count}** files\n💰 {cost} points",
                             inline=True
                         )
+                
+                embed.set_footer(text="Use /cookie to claim | Prices shown are for your role")
             
             await ctx.send(embed=embed, ephemeral=True)
         except Exception as e:
