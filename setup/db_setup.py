@@ -22,7 +22,7 @@ class DatabaseSetup:
         
         collections = await self.db.list_collection_names()
         
-        required_collections = ["users", "servers", "config", "statistics"]
+        required_collections = ["users", "servers", "config", "statistics", "analytics"]
         for collection in required_collections:
             if collection not in collections:
                 await self.db.create_collection(collection)
@@ -33,6 +33,7 @@ class DatabaseSetup:
         await self.create_indexes()
         await self.initialize_config()
         await self.initialize_statistics()
+        await self.initialize_analytics()
         
     async def create_indexes(self):
         print("\nCreating indexes...")
@@ -48,6 +49,9 @@ class DatabaseSetup:
         
         await self.db.users.create_index("blacklisted")
         print("Created index on users.blacklisted")
+        
+        await self.db.analytics.create_index("_id")
+        print("Created index on analytics._id")
         
     async def initialize_config(self):
         print("\nInitializing bot configuration...")
@@ -118,6 +122,97 @@ class DatabaseSetup:
             }
             await self.db.statistics.insert_one(weekly_doc)
             print("Created weekly statistics")
+    
+    async def initialize_analytics(self):
+        print("\nInitializing analytics collection...")
+        
+        # Bot analytics
+        bot_analytics = await self.db.analytics.find_one({"_id": "bot_analytics"})
+        if not bot_analytics:
+            analytics_doc = {
+                "_id": "bot_analytics",
+                "total_users": 0,
+                "total_servers": 0,
+                "total_commands": 0,
+                "total_cookies": 0,
+                "last_updated": datetime.now(timezone.utc)
+            }
+            await self.db.analytics.insert_one(analytics_doc)
+            print("Created bot analytics document")
+        
+        # Command usage analytics
+        command_usage = await self.db.analytics.find_one({"_id": "command_usage"})
+        if not command_usage:
+            commands = ["cookie", "daily", "points", "help", "stock", "feedback", "invites", "status"]
+            command_doc = {
+                "_id": "command_usage",
+                "commands": {
+                    cmd: {
+                        "total": 0,
+                        "today": 0,
+                        "this_week": 0,
+                        "this_month": 0,
+                        "unique_users": [],
+                        "guilds": []
+                    } for cmd in commands
+                },
+                "last_updated": datetime.now(timezone.utc)
+            }
+            await self.db.analytics.insert_one(command_doc)
+            print("Created command usage analytics")
+        
+        # Cookie extraction analytics
+        cookie_extractions = await self.db.analytics.find_one({"_id": "cookie_extractions"})
+        if not cookie_extractions:
+            cookie_types = ["netflix", "spotify", "prime", "jiohotstar", 
+                          "tradingview", "chatgpt", "claude", "peacock", "crunchyroll", "canalplus"]
+            extraction_doc = {
+                "_id": "cookie_extractions",
+                "cookies": {
+                    cookie: {
+                        "total": 0,
+                        "today": 0,
+                        "this_week": 0,
+                        "this_month": 0,
+                        "unique_users": [],
+                        "files": []
+                    } for cookie in cookie_types
+                },
+                "total_all_time": 0,
+                "total_today": 0,
+                "total_this_week": 0,
+                "total_this_month": 0,
+                "last_updated": datetime.now(timezone.utc)
+            }
+            await self.db.analytics.insert_one(extraction_doc)
+            print("Created cookie extraction analytics")
+        
+        # Active users analytics
+        active_users = await self.db.analytics.find_one({"_id": "active_users"})
+        if not active_users:
+            active_doc = {
+                "_id": "active_users",
+                "all_time_users": [],
+                "daily_active_users": [],
+                "weekly_active_users": [],
+                "monthly_active_users": [],
+                "user_details": {},
+                "last_updated": datetime.now(timezone.utc)
+            }
+            await self.db.analytics.insert_one(active_doc)
+            print("Created active users analytics")
+        
+        # Real-time stats
+        realtime_stats = await self.db.analytics.find_one({"_id": "real_time_stats"})
+        if not realtime_stats:
+            realtime_doc = {
+                "_id": "real_time_stats",
+                "commands": {},
+                "active_users": [],
+                "last_updated": datetime.now(timezone.utc)
+            }
+            await self.db.analytics.insert_one(realtime_doc)
+            print("Created real-time stats analytics")
             
     async def setup_default_configs(self):
         print("\nSetting up default configurations...")
@@ -293,6 +388,21 @@ class DatabaseSetup:
                 print("Top 5 cookies:")
                 for cookie, count in top_cookies:
                     print(f"  {cookie}: {count} claims")
+        
+        # Show analytics stats
+        analytics = await self.db.analytics.find_one({"_id": "bot_analytics"})
+        if analytics:
+            print(f"\n=== Analytics Overview ===")
+            print(f"Total Commands: {analytics.get('total_commands', 0):,}")
+            print(f"Total Cookies Extracted: {analytics.get('total_cookies', 0):,}")
+        
+        active_users = await self.db.analytics.find_one({"_id": "active_users"})
+        if active_users:
+            print(f"\n=== Active Users ===")
+            print(f"All Time Users: {len(active_users.get('all_time_users', []))}")
+            print(f"Daily Active: {len(active_users.get('daily_active_users', []))}")
+            print(f"Weekly Active: {len(active_users.get('weekly_active_users', []))}")
+            print(f"Monthly Active: {len(active_users.get('monthly_active_users', []))}")
                     
     async def run(self):
         try:
