@@ -6,16 +6,12 @@ import os
 import random
 from datetime import datetime, timedelta, timezone
 import traceback
-import re
-import hashlib
 
 class CookieCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.db = bot.db
         self.check_feedback_deadlines.start()
-        self.rate_limits = {}
-        self.suspicious_cache = {}
         
     async def get_or_create_user(self, user_id: int, username: str):
         user = await self.db.users.find_one({"user_id": user_id})
@@ -37,9 +33,7 @@ class CookieCog(commands.Cog):
                 "weekly_claims": 0,
                 "total_claims": 0,
                 "blacklisted": False,
-                "blacklist_expires": None,
-                "failed_attempts": 0,
-                "last_failed_attempt": None
+                "blacklist_expires": None
             }
             await self.db.users.insert_one(user)
         else:
@@ -80,128 +74,6 @@ class CookieCog(commands.Cog):
                     await main_log.send(embed=embed)
         except Exception as e:
             print(f"Error logging action: {e}")
-    
-    async def check_user_filters(self, ctx, user: discord.Member) -> tuple[bool, str]:
-        config = await self.db.config.find_one({"_id": "bot_config"})
-        if not config:
-            config = {
-                "min_account_age_days": 7,
-                "min_server_days": 1,
-                "min_trust_score": 20,
-                "rate_limit_claims": 3,
-                "rate_limit_window": 60,
-                "max_failed_attempts": 5,
-                "suspicious_username_patterns": ["test", "bot", "spam", "fake", "temp", "throwaway"],
-                "require_avatar": True,
-                "require_verified_email": False,
-                "min_message_count": 0
-            }
-        
-        # Account age check
-        account_age = datetime.now(timezone.utc) - user.created_at.replace(tzinfo=timezone.utc)
-        if account_age < timedelta(days=config.get("min_account_age_days", 7)):
-            await self.log_failed_attempt(user.id, "Account too new")
-            return False, f"❌ Your account must be at least **{config.get('min_account_age_days', 7)}** days old to claim cookies.\nYour account age: **{account_age.days}** days"
-        
-        # Server join age check
-        if user.joined_at:
-            server_age = datetime.now(timezone.utc) - user.joined_at.replace(tzinfo=timezone.utc)
-            if server_age < timedelta(days=config.get("min_server_days", 1)):
-                await self.log_failed_attempt(user.id, "Joined server too recently")
-                return False, f"❌ You must be in the server for at least **{config.get('min_server_days', 1)}** days to claim cookies.\nYou joined: **{server_age.days}** days ago"
-        
-        # Avatar check
-        if config.get("require_avatar", True) and not user.avatar:
-            await self.log_failed_attempt(user.id, "No avatar")
-            return False, "❌ You must have a profile avatar to claim cookies."
-        
-        # Suspicious username check
-        patterns = config.get("suspicious_username_patterns", [])
-        username_lower = user.name.lower()
-        for pattern in patterns:
-            if pattern.lower() in username_lower:
-                await self.log_failed_attempt(user.id, f"Suspicious username: {pattern}")
-                return False, "❌ Your username has been flagged as suspicious. Please contact an admin."
-        
-        # Excessive numbers in username
-        if len(re.findall(r'\d', user.name)) > len(user.name) * 0.5:
-            await self.log_failed_attempt(user.id, "Too many numbers in username")
-            return False, "❌ Your username contains too many numbers."
-        
-        # Trust score check
-        user_data = await self.db.users.find_one({"user_id": user.id})
-        if user_data:
-            trust_score = user_data.get("trust_score", 50)
-            if trust_score < config.get("min_trust_score", 20):
-                return False, f"❌ Your trust score is too low ({trust_score}/100). Minimum required: {config.get('min_trust_score', 20)}"
-            
-            # Failed attempts check
-            failed_attempts = user_data.get("failed_attempts", 0)
-            if failed_attempts >= config.get("max_failed_attempts", 5):
-                last_failed = user_data.get("last_failed_attempt")
-                if last_failed and datetime.now(timezone.utc) - last_failed < timedelta(hours=24):
-                    return False, "❌ Too many failed attempts. Please try again in 24 hours."
-        
-        # Rate limit check
-        rate_check = await self.check_rate_limit(user.id)
-        if not rate_check[0]:
-            return False, f"❌ Rate limit exceeded. Please wait {rate_check[1]} before trying again."
-        
-        # Duplicate device check (using hash of user ID pattern)
-        device_hash = self.get_device_fingerprint(user)
-        if device_hash in self.suspicious_cache:
-            last_seen = self.suspicious_cache[device_hash]
-            if datetime.now(timezone.utc) - last_seen < timedelta(minutes=30):
-                await self.log_failed_attempt(user.id, "Duplicate device detected")
-                return False, "❌ Multiple accounts detected from same device. This has been logged."
-        
-        self.suspicious_cache[device_hash] = datetime.now(timezone.utc)
-        
-        return True, "Passed all filters"
-    
-    async def log_failed_attempt(self, user_id: int, reason: str):
-        await self.db.users.update_one(
-            {"user_id": user_id},
-            {
-                "$inc": {"failed_attempts": 1},
-                "$set": {"last_failed_attempt": datetime.now(timezone.utc)},
-                "$push": {
-                    "failed_attempt_log": {
-                        "timestamp": datetime.now(timezone.utc),
-                        "reason": reason
-                    }
-                }
-            }
-        )
-    
-    def get_device_fingerprint(self, user: discord.Member) -> str:
-        data = f"{user.created_at.timestamp()}-{user.discriminator}-{len(user.name)}"
-        return hashlib.md5(data.encode()).hexdigest()[:8]
-    
-    async def check_rate_limit(self, user_id: int) -> tuple[bool, str]:
-        now = datetime.now(timezone.utc)
-        config = await self.db.config.find_one({"_id": "bot_config"})
-        
-        window = config.get("rate_limit_window", 60)
-        max_claims = config.get("rate_limit_claims", 3)
-        
-        if user_id not in self.rate_limits:
-            self.rate_limits[user_id] = []
-        
-        self.rate_limits[user_id] = [
-            timestamp for timestamp in self.rate_limits[user_id]
-            if now - timestamp < timedelta(minutes=window)
-        ]
-        
-        if len(self.rate_limits[user_id]) >= max_claims:
-            oldest = min(self.rate_limits[user_id])
-            time_until_reset = timedelta(minutes=window) - (now - oldest)
-            minutes = int(time_until_reset.total_seconds() // 60)
-            seconds = int(time_until_reset.total_seconds() % 60)
-            return False, f"{minutes}m {seconds}s"
-        
-        self.rate_limits[user_id].append(now)
-        return True, ""
     
     async def update_statistics(self, cookie_type: str, user_id: int):
         try:
@@ -289,8 +161,7 @@ class CookieCog(commands.Cog):
                                 "$set": {
                                     "blacklisted": True,
                                     "blacklist_expires": now + timedelta(days=30)
-                                },
-                                "$inc": {"trust_score": -10}
+                                }
                             }
                         )
                         
@@ -298,7 +169,7 @@ class CookieCog(commands.Cog):
                         if guild_id:
                             await self.log_action(
                                 guild_id,
-                                f"🚫 <@{user['user_id']}> blacklisted for not providing feedback (Trust: -10)",
+                                f"🚫 <@{user['user_id']}> blacklisted for not providing feedback",
                                 discord.Color.red()
                             )
         except Exception as e:
@@ -308,17 +179,6 @@ class CookieCog(commands.Cog):
     async def cookie(self, ctx, type: str):
         try:
             if not await self.check_maintenance(ctx):
-                return
-            
-            # Run all filters first
-            filter_passed, filter_message = await self.check_user_filters(ctx, ctx.author)
-            if not filter_passed:
-                await ctx.send(filter_message, ephemeral=True)
-                await self.log_action(
-                    ctx.guild.id,
-                    f"🚫 {ctx.author.mention} failed filter check: {filter_message.split('.')[0]}",
-                    discord.Color.orange()
-                )
                 return
             
             server = await self.db.servers.find_one({"server_id": ctx.guild.id})
@@ -414,15 +274,13 @@ class CookieCog(commands.Cog):
                                 "server_id": ctx.guild.id,
                                 "feedback_deadline": feedback_deadline,
                                 "feedback_given": False
-                            },
-                            "failed_attempts": 0
+                            }
                         },
                         "$inc": {
                             "total_spent": cost,
                             f"cookie_claims.{type}": 1,
                             "weekly_claims": 1,
-                            "total_claims": 1,
-                            "trust_score": 1
+                            "total_claims": 1
                         }
                     }
                 )
@@ -437,7 +295,7 @@ class CookieCog(commands.Cog):
                 
                 await self.log_action(
                     ctx.guild.id,
-                    f"🍪 {ctx.author.mention} claimed **{type}** cookie (`{selected_file}`) [-{cost} points] [Trust: {user_data.get('trust_score', 50) + 1}]",
+                    f"🍪 {ctx.author.mention} claimed **{type}** cookie (`{selected_file}`) [-{cost} points]",
                     discord.Color.green()
                 )
                 

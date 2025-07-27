@@ -1,49 +1,31 @@
+# main.py
+
 import discord
 from discord.ext import commands
+from discord import app_commands
 import motor.motor_asyncio
 import os
 import asyncio
-from dotenv import load_dotenv
-import aiohttp
-import logging
 from datetime import datetime, timezone
+from dotenv import load_dotenv
 
-load_dotenv("setup/.env")
+# Load environment variables from setup folder
+load_dotenv('setup/.env')
 
-class CookieBot(commands.Bot):
+class MyBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.all()
-        super().__init__(
-            command_prefix="!",
-            intents=intents,
-            activity=discord.Activity(
-                type=discord.ActivityType.watching,
-                name="🍪 /help | Cookie Store"
-            ),
-            status=discord.Status.online,
-            help_command=None
-        )
-        self.session = None
+        super().__init__(command_prefix="!", intents=intents)
+        self.remove_command('help')
         self.start_time = datetime.now(timezone.utc)
-        self.logger = self.setup_logging()
-       
-    def setup_logging(self):
-        logger = logging.getLogger('CookieBot')
-        logger.setLevel(logging.INFO)
-       
-        handler = logging.StreamHandler()
-        handler.setFormatter(logging.Formatter(
-            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-        ))
-        logger.addHandler(handler)
-       
-        return logger
-       
+        
     async def setup_hook(self):
-        self.session = aiohttp.ClientSession()
-        await self.load_extensions()
-       
-    async def load_extensions(self):
+        await self.load_cogs()
+        # Just sync without clearing
+        synced = await self.tree.sync()
+        print(f"Synced {len(synced)} commands")
+    
+    async def load_cogs(self):
         cogs = [
             "cogs.cookie",
             "cogs.points",
@@ -51,267 +33,159 @@ class CookieBot(commands.Bot):
             "cogs.invite",
             "cogs.directory"
         ]
-       
+        
         for cog in cogs:
             try:
                 await self.load_extension(cog)
-                self.logger.info(f"✅ Loaded: {cog}")
+                print(f"Loaded cog: {cog}")
             except Exception as e:
-                self.logger.error(f"❌ Failed to load {cog}: {e}")
-               
-    async def close(self):
-        await super().close()
-        if self.session:
-            await self.session.close()
+                print(f"Failed to load cog {cog}: {e}")
 
-bot = CookieBot()
-bot.db = motor.motor_asyncio.AsyncIOMotorClient(os.getenv("MONGODB_URI"))[os.getenv("DATABASE_NAME", "discord_bot")]
+bot = MyBot()
+
+MONGODB_URI = os.getenv("MONGODB_URI")
+DATABASE_NAME = os.getenv("DATABASE_NAME", "discord_bot")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+
+mongo_client = motor.motor_asyncio.AsyncIOMotorClient(MONGODB_URI)
+db = mongo_client[DATABASE_NAME]
+bot.db = db
 
 @bot.event
 async def on_ready():
-    bot.logger.info(f"🍪 {bot.user} is online!")
-    bot.logger.info(f"📊 Connected to {len(bot.guilds)} servers")
-    bot.logger.info(f"👥 Serving {sum(g.member_count for g in bot.guilds)} users")
-   
-    try:
-        synced = await bot.tree.sync()
-        bot.logger.info(f"✅ Synced {len(synced)} slash commands globally")
+    print(f"Bot logged in as {bot.user}")
+    print(f"Connected to {len(bot.guilds)} servers")
+
+@bot.event
+async def on_message(message):
+    if message.author.bot:
+        return
+    
+    if bot.user.mentioned_in(message) and message.content.replace(f'<@{bot.user.id}>', '').strip() == '':
+        uptime = datetime.now(timezone.utc) - bot.start_time
+        days = uptime.days
+        hours, remainder = divmod(uptime.seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
         
-        for guild in bot.guilds:
-            try:
-                guild_synced = await bot.tree.sync(guild=guild)
-                bot.logger.info(f"✅ Synced {len(guild_synced)} commands in {guild.name}")
-            except Exception as e:
-                bot.logger.error(f"❌ Failed to sync in {guild.name}: {e}")
-                
-    except Exception as e:
-        bot.logger.error(f"❌ Failed to sync commands: {e}")
-   
-    config = await bot.db.config.find_one({"_id": "bot_config"})
-    if config and config.get("main_log_channel"):
-        channel = bot.get_channel(config["main_log_channel"])
-        if channel:
-            embed = discord.Embed(
-                title="🟢 Bot Online",
-                color=0x00ff00,
-                timestamp=datetime.now(timezone.utc)
-            )
-            embed.add_field(name="Servers", value=f"```{len(bot.guilds)}```", inline=True)
-            embed.add_field(name="Users", value=f"```{sum(g.member_count for g in bot.guilds)}```", inline=True)
-            embed.add_field(name="Latency", value=f"```{round(bot.latency * 1000)}ms```", inline=True)
-            embed.set_thumbnail(url=bot.user.display_avatar.url)
-            await channel.send(embed=embed)
-
-@bot.event
-async def on_guild_join(guild):
-    bot.logger.info(f"📥 Joined: {guild.name} ({guild.id})")
-   
-    try:
-        await bot.tree.sync(guild=guild)
-        bot.logger.info(f"✅ Synced commands for new guild: {guild.name}")
-    except Exception as e:
-        bot.logger.error(f"❌ Failed to sync for new guild {guild.name}: {e}")
-   
-    embed = discord.Embed(
-        title="🍪 Cookie Bot Setup",
-        description="Thank you for adding Cookie Bot!",
-        color=0x5865F2,
-        timestamp=datetime.now(timezone.utc)
-    )
-    embed.add_field(
-        name="🚀 Quick Start",
-        value="```\n/setup - Complete server setup\n/help - View all commands\n/guide - Setup guide```",
-        inline=False
-    )
-    embed.add_field(
-        name="📚 Features",
-        value="• Cookie claiming system\n• Points economy\n• Role-based benefits\n• Invite tracking\n• Analytics dashboard",
-        inline=False
-    )
-    embed.add_field(
-        name="🔗 Links",
-        value=f"[Support Server]({os.getenv('MAIN_SERVER_INVITE')}) • [Documentation](https://cookiebot.com/docs)",
-        inline=False
-    )
-    embed.set_thumbnail(url=bot.user.display_avatar.url)
-    embed.set_footer(text=f"Cookie Bot v2.0 • {guild.member_count} members")
-   
-    for channel in guild.text_channels:
-        if channel.permissions_for(guild.me).send_messages:
-            await channel.send(embed=embed)
-            break
-           
-    config = await bot.db.config.find_one({"_id": "bot_config"})
-    if config and config.get("main_log_channel"):
-        log_channel = bot.get_channel(config["main_log_channel"])
-        if log_channel:
-            log_embed = discord.Embed(
-                title="📥 New Server Joined",
-                color=0x00ff00,
-                timestamp=datetime.now(timezone.utc)
-            )
-            log_embed.add_field(name="Server", value=guild.name, inline=True)
-            log_embed.add_field(name="ID", value=f"`{guild.id}`", inline=True)
-            log_embed.add_field(name="Members", value=guild.member_count, inline=True)
-            log_embed.add_field(name="Owner", value=f"{guild.owner} ({guild.owner.id})", inline=False)
-            if guild.icon:
-                log_embed.set_thumbnail(url=guild.icon.url)
-            await log_channel.send(embed=log_embed)
-
-@bot.event
-async def on_guild_remove(guild):
-    bot.logger.info(f"📤 Left: {guild.name} ({guild.id})")
-   
-    config = await bot.db.config.find_one({"_id": "bot_config"})
-    if config and config.get("main_log_channel"):
-        log_channel = bot.get_channel(config["main_log_channel"])
-        if log_channel:
-            embed = discord.Embed(
-                title="📤 Server Left",
-                color=0xff0000,
-                timestamp=datetime.now(timezone.utc)
-            )
-            embed.add_field(name="Server", value=guild.name, inline=True)
-            embed.add_field(name="ID", value=f"`{guild.id}`", inline=True)
-            embed.add_field(name="Members", value=guild.member_count, inline=True)
-            await log_channel.send(embed=embed)
+        embed = discord.Embed(
+            title="🍪 Cookie Bot Status",
+            description=f"Hey {message.author.mention}! I'm online and ready to serve cookies!",
+            color=discord.Color.blue()
+        )
+        embed.add_field(name="⏰ Uptime", value=f"{days}d {hours}h {minutes}m {seconds}s", inline=True)
+        embed.add_field(name="📊 Servers", value=f"{len(bot.guilds)}", inline=True)
+        embed.add_field(name="🏓 Ping", value=f"{round(bot.latency * 1000)}ms", inline=True)
+        embed.set_footer(text="Use /help for commands")
+        
+        await message.reply(embed=embed)
+    
+    await bot.process_commands(message)
 
 @bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, commands.CommandNotFound):
         return
     elif isinstance(error, commands.MissingRequiredArgument):
-        embed = discord.Embed(
-            title="❌ Missing Argument",
-            description=f"Missing required argument: `{error.param.name}`",
-            color=0xff0000
-        )
-        await ctx.send(embed=embed, ephemeral=True)
-    elif isinstance(error, commands.CommandOnCooldown):
-        embed = discord.Embed(
-            title="⏰ Cooldown Active",
-            description=f"Try again in **{error.retry_after:.1f}** seconds",
-            color=0xffa500
-        )
-        await ctx.send(embed=embed, ephemeral=True)
-    elif isinstance(error, commands.MissingPermissions):
-        embed = discord.Embed(
-            title="🚫 Missing Permissions",
-            description="You don't have permission to use this command",
-            color=0xff0000
-        )
-        await ctx.send(embed=embed, ephemeral=True)
+        await ctx.send(f"❌ Missing argument: {error.param.name}", ephemeral=True)
     else:
-        bot.logger.error(f"Unhandled error: {error}")
-        embed = discord.Embed(
-            title="❌ Error Occurred",
-            description="An unexpected error occurred. Please try again later.",
-            color=0xff0000
-        )
-        await ctx.send(embed=embed, ephemeral=True)
+        print(f"Error: {error}")
 
-@bot.tree.error
-async def on_app_command_error(interaction: discord.Interaction, error: discord.app_commands.AppCommandError):
-    if isinstance(error, discord.app_commands.CommandOnCooldown):
-        embed = discord.Embed(
-            title="⏰ Cooldown Active",
-            description=f"Try again in **{error.retry_after:.1f}** seconds",
-            color=0xffa500
-        )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-    else:
-        bot.logger.error(f"App command error: {error}")
-
-@bot.command()
-@commands.is_owner()
-async def sync(ctx):
-    """Force sync all commands"""
-    await ctx.defer()
-    try:
-        synced = await bot.tree.sync()
-        await ctx.send(f"✅ Force synced {len(synced)} global commands")
+@bot.tree.command(name="forcesync", description="Force sync all commands (Owner Only)")
+async def forcesync(interaction: discord.Interaction):
+    config = await db.config.find_one({"_id": "bot_config"})
+    if interaction.user.id != config.get("owner_id"):
+        await interaction.response.send_message("❌ This command is owner only!", ephemeral=True)
+        return
         
-        for guild in bot.guilds:
-            try:
-                guild_synced = await bot.tree.sync(guild=guild)
-                await ctx.send(f"✅ Synced {len(guild_synced)} commands in {guild.name}")
-            except Exception as e:
-                await ctx.send(f"❌ Failed to sync in {guild.name}: {e}")
+    await interaction.response.defer(ephemeral=True)
+    
+    try:
+        commands = await bot.tree.sync()
+        
+        embed = discord.Embed(
+            title="✅ Force Sync Complete",
+            description=f"Synced {len(commands)} commands",
+            color=discord.Color.green()
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
     except Exception as e:
-        await ctx.send(f"❌ Sync failed: {e}")
+        await interaction.followup.send(f"❌ Failed to sync: {e}", ephemeral=True)
 
-@bot.hybrid_command(name="ping", description="Check bot latency")
-async def ping(ctx):
-    """Test command to verify bot is working"""
+@bot.tree.command(name="setup", description="Setup the bot for this server (Admin Only)")
+@app_commands.default_permissions(administrator=True)
+async def setup(interaction: discord.Interaction):
+    await interaction.response.defer()
+    
+    guild = interaction.guild
     embed = discord.Embed(
-        title="🏓 Pong!",
-        description=f"Latency: **{round(bot.latency * 1000)}ms**",
-        color=0x00ff00
+        title="🔧 Server Setup",
+        description="Setting up the bot...",
+        color=discord.Color.blue()
     )
-    await ctx.send(embed=embed)
-
-@bot.command()
-@commands.is_owner()
-async def listcmds(ctx):
-    """List all registered commands"""
-    commands_list = []
-    for command in bot.tree.get_commands():
-        commands_list.append(f"/{command.name} - {command.description}")
     
-    if commands_list:
-        embed = discord.Embed(
-            title="📋 Registered Commands",
-            description="\n".join(commands_list[:20]),
-            color=0x00ff00
-        )
-        if len(commands_list) > 20:
-            embed.set_footer(text=f"Showing 20 of {len(commands_list)} commands")
+    existing_category = discord.utils.get(guild.categories, name="🍪 Cookie Bot")
+    if existing_category:
+        category = existing_category
     else:
-        embed = discord.Embed(
-            title="❌ No Commands Found",
-            description="No slash commands are registered",
-            color=0xff0000
-        )
+        category = await guild.create_category("🍪 Cookie Bot")
     
-    await ctx.send(embed=embed)
-
-@bot.command()
-@commands.is_owner()
-async def forcesync(ctx):
-    """Force sync commands to specific guild"""
-    await ctx.defer()
+    channels_created = {}
+    channel_configs = [
+        ("🍪cookie-claims", "Use bot commands here", "cookie"),
+        ("📸feedback-photos", "Submit feedback screenshots", "feedback"),
+        ("📝bot-logs", "Bot activity logs", "log"),
+        ("📢announcements", "Bot announcements", "announcement")
+    ]
     
-    try:
-        # Clear existing commands
-        bot.tree.clear_commands(guild=ctx.guild)
-        await bot.tree.sync(guild=ctx.guild)
-        
-        # Copy global commands to guild
-        bot.tree.copy_global_to(guild=ctx.guild)
-        synced = await bot.tree.sync(guild=ctx.guild)
-        
-        await ctx.send(f"✅ Force synced {len(synced)} commands to this guild")
-    except Exception as e:
-        await ctx.send(f"❌ Force sync failed: {e}")
-
-@bot.command()
-@commands.is_owner()
-async def clearcmds(ctx):
-    """Clear all commands and resync"""
-    await ctx.defer()
+    for channel_name, topic, ch_type in channel_configs:
+        channel = discord.utils.get(category.channels, name=channel_name)
+        if not channel:
+            channel = await category.create_text_channel(channel_name, topic=topic)
+        channels_created[ch_type] = channel.id
     
-    try:
-        # Clear all commands
-        bot.tree.clear_commands(guild=None)
-        await bot.tree.sync()
+    config = await db.config.find_one({"_id": "bot_config"})
+    default_cookies = config.get("default_cookies", {})
+    
+    roles_created = {}
+    role_configs = [
+        ("🍪 Free Cookie", discord.Color.default(), "free"),
+        ("⭐ Premium Cookie", discord.Color.gold(), "premium"),
+        ("💎 VIP Cookie", discord.Color.purple(), "vip")
+    ]
+    
+    for role_name, color, role_type in role_configs:
+        role = discord.utils.get(guild.roles, name=role_name)
+        if not role:
+            role = await guild.create_role(name=role_name, color=color)
         
-        await ctx.send("✅ Cleared all global commands. Restart bot to re-register.")
-    except Exception as e:
-        await ctx.send(f"❌ Clear failed: {e}")
-
-async def main():
-    async with bot:
-        await bot.start(os.getenv("BOT_TOKEN"))
+        default_role_config = config.get("default_roles", {}).get(role_type, {})
+        if default_role_config:
+            roles_created[str(role.id)] = default_role_config
+    
+    server_data = {
+        "server_id": guild.id,
+        "server_name": guild.name,
+        "server_owner": guild.owner_id,
+        "admins": [guild.owner_id],
+        "channels": channels_created,
+        "cookies": default_cookies,
+        "role_based": True,
+        "roles": roles_created,
+        "enabled": True
+    }
+    
+    await db.servers.update_one(
+        {"server_id": guild.id},
+        {"$set": server_data},
+        upsert=True
+    )
+    
+    embed = discord.Embed(
+        title="✅ Setup Complete!",
+        description=f"Channels: {len(channels_created)}\nRoles: {len(roles_created)}",
+        color=discord.Color.green()
+    )
+    await interaction.followup.send(embed=embed)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    bot.run(BOT_TOKEN)
