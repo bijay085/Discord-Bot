@@ -178,7 +178,8 @@ class AdminCog(commands.Cog):
             {
                 "$set": {
                     "blacklisted": False,
-                    "blacklist_expires": None
+                    "blacklist_expires": None,
+                    "last_claim.feedback_given": True  # ADD THIS LINE
                 }
             }
         )
