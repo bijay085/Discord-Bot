@@ -47,7 +47,7 @@ class CookieBot(commands.Bot):
         cogs = [
             "cogs.cookie",
             "cogs.points",
-            "cogs.admin_moderation",
+            "cogs.admin",
             "cogs.invite",
             "cogs.directory",
             "cogs.economy",
