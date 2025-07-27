@@ -1,3 +1,4 @@
 setup/.env
 cogs/__pycache__/
 cookies/
+bot.log
