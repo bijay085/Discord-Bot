@@ -31,7 +31,9 @@ class MyBot(commands.Bot):
             "cogs.points",
             "cogs.admin",
             "cogs.invite",
-            "cogs.directory"
+            "cogs.directory",
+            "cogs.analytics"  # Added analytics cog
+
         ]
         
         for cog in cogs:

@@ -1,9 +1,13 @@
+# cogs/cookie.py
+
 import discord
 from discord.ext import commands, tasks
+from discord import app_commands
 import os
 import random
 from datetime import datetime, timedelta, timezone
 import traceback
+from typing import List
 
 class CookieCog(commands.Cog):
     def __init__(self, bot):
@@ -102,13 +106,18 @@ class CookieCog(commands.Cog):
             return False, None
             
         if user.get("blacklist_expires"):
-            if datetime.now(timezone.utc) > user["blacklist_expires"]:
+            expires = user["blacklist_expires"]
+            # Ensure expires is timezone-aware
+            if expires.tzinfo is None:
+                expires = expires.replace(tzinfo=timezone.utc)
+            
+            if datetime.now(timezone.utc) > expires:
                 await self.db.users.update_one(
                     {"user_id": user_id},
                     {"$set": {"blacklisted": False, "blacklist_expires": None}}
                 )
                 return False, None
-            return True, user["blacklist_expires"]
+            return True, expires
         return True, None
     
     async def get_user_cooldown(self, user: discord.Member, server: dict, cookie_type: str) -> int:
@@ -140,6 +149,19 @@ class CookieCog(commands.Cog):
         
         return min_cost
     
+    async def cookie_autocomplete(self, interaction: discord.Interaction, current: str) -> List[app_commands.Choice[str]]:
+        server = await self.db.servers.find_one({"server_id": interaction.guild_id})
+        if not server:
+            return []
+        
+        choices = []
+        for cookie_type, config in server.get("cookies", {}).items():
+            if config.get("enabled", True) and cookie_type.lower().startswith(current.lower()):
+                cost = config.get("cost", 0)
+                choices.append(app_commands.Choice(name=f"{cookie_type} ({cost} points)", value=cookie_type))
+        
+        return choices[:25]
+    
     @tasks.loop(minutes=5)
     async def check_feedback_deadlines(self):
         try:
@@ -152,7 +174,12 @@ class CookieCog(commands.Cog):
             }):
                 last_claim = user.get("last_claim")
                 if last_claim and last_claim.get("feedback_deadline"):
-                    if now > last_claim["feedback_deadline"]:
+                    deadline = last_claim["feedback_deadline"]
+                    # Ensure deadline is timezone-aware
+                    if deadline.tzinfo is None:
+                        deadline = deadline.replace(tzinfo=timezone.utc)
+                    
+                    if now > deadline:
                         await self.db.users.update_one(
                             {"user_id": user["user_id"]},
                             {
@@ -173,26 +200,9 @@ class CookieCog(commands.Cog):
         except Exception as e:
             print(f"Error in feedback check: {e}")
 
-    async def cookie_autocomplete(self, interaction: discord.Interaction, current: str):
-        server = await self.db.servers.find_one({"server_id": interaction.guild.id})
-        if not server:
-            return []
-        
-        choices = []
-        for cookie_type, config in server.get("cookies", {}).items():
-            if config.get("enabled", True):
-                if current.lower() in cookie_type.lower():
-                    cost = await self.get_user_cost(interaction.user, server, cookie_type)
-                    cooldown = await self.get_user_cooldown(interaction.user, server, cookie_type)
-                    choices.append(discord.app_commands.Choice(
-                        name=f"{cookie_type.title()} - {cost} points ({cooldown}h cooldown)",
-                        value=cookie_type
-                    ))
-        
-        return choices[:25]
-
     @commands.hybrid_command(name="cookie", description="Claim a cookie")
-    @discord.app_commands.autocomplete(type=cookie_autocomplete)
+    @app_commands.describe(type="The type of cookie you want to claim")
+    @app_commands.autocomplete(type=cookie_autocomplete)
     async def cookie(self, ctx, type: str):
         try:
             if not await self.check_maintenance(ctx):
@@ -220,17 +230,7 @@ class CookieCog(commands.Cog):
             type = type.lower()
             if type not in server["cookies"]:
                 available = [c for c, cfg in server["cookies"].items() if cfg.get("enabled", True)]
-                embed = discord.Embed(
-                    title="❌ Invalid Cookie Type",
-                    description="Please select a valid cookie type using the autocomplete menu!",
-                    color=discord.Color.red()
-                )
-                embed.add_field(
-                    name="Available Cookies",
-                    value="\n".join([f"• **{c}**" for c in available[:10]]),
-                    inline=False
-                )
-                await ctx.send(embed=embed, ephemeral=True)
+                await ctx.send(f"❌ Invalid cookie type!\nAvailable: `{', '.join(available)}`", ephemeral=True)
                 return
             
             cookie_config = server["cookies"][type]
@@ -245,7 +245,12 @@ class CookieCog(commands.Cog):
             if user_data.get("last_claim"):
                 last_claim = user_data["last_claim"]
                 if last_claim.get("type") == type:
-                    time_passed = datetime.now(timezone.utc) - last_claim["date"]
+                    claim_date = last_claim["date"]
+                    # Ensure both datetimes are timezone-aware
+                    if claim_date.tzinfo is None:
+                        claim_date = claim_date.replace(tzinfo=timezone.utc)
+                    
+                    time_passed = datetime.now(timezone.utc) - claim_date
                     if time_passed < timedelta(hours=cooldown_hours):
                         remaining = timedelta(hours=cooldown_hours) - time_passed
                         hours = int(remaining.total_seconds() // 3600)
@@ -276,7 +281,8 @@ class CookieCog(commands.Cog):
             selected_file = random.choice(files)
             file_path = os.path.join(directory, selected_file)
             
-            await ctx.send(f"✅ Processing your {type} cookie request...", ephemeral=True)
+            # Send initial response
+            initial_msg = await ctx.send(f"✅ Processing your {type} cookie request...", ephemeral=True)
             
             try:
                 dm_message = await ctx.author.send(
@@ -314,11 +320,25 @@ class CookieCog(commands.Cog):
                 
                 await self.update_statistics(type, ctx.author.id)
                 
-                await ctx.edit_original_response(
-                    content=f"✅ **{type}** cookie sent to your DMs!\n"
-                    f"💰 -{cost} points | Balance: **{user_data['points'] - cost}** points\n"
-                    f"⏰ Submit feedback in <#{server['channels']['feedback']}> within **15 minutes**!"
-                )
+                # Track analytics
+                analytics_cog = self.bot.get_cog("AnalyticsCog")
+                if analytics_cog:
+                    await analytics_cog.track_cookie_extraction(type, ctx.author.id, selected_file)
+                    await analytics_cog.track_active_user(ctx.author.id, str(ctx.author))
+                
+                # Edit the initial message
+                if hasattr(ctx, 'interaction') and ctx.interaction:
+                    await ctx.interaction.edit_original_response(
+                        content=f"✅ **{type}** cookie sent to your DMs!\n"
+                        f"💰 -{cost} points | Balance: **{user_data['points'] - cost}** points\n"
+                        f"⏰ Submit feedback in <#{server['channels']['feedback']}> within **15 minutes**!"
+                    )
+                else:
+                    await initial_msg.edit(
+                        content=f"✅ **{type}** cookie sent to your DMs!\n"
+                        f"💰 -{cost} points | Balance: **{user_data['points'] - cost}** points\n"
+                        f"⏰ Submit feedback in <#{server['channels']['feedback']}> within **15 minutes**!"
+                    )
                 
                 await self.log_action(
                     ctx.guild.id,
@@ -327,39 +347,26 @@ class CookieCog(commands.Cog):
                 )
                 
             except discord.Forbidden:
-                await ctx.edit_original_response(
-                    content="❌ **I can't send you a DM!**\n\n"
-                    "Please check:\n"
-                    "• Enable DMs from server members\n"
-                    "• Make sure you haven't blocked the bot\n"
-                    "• Check your privacy settings"
-                )
+                error_msg = "❌ **I can't send you a DM!**\n\n" \
+                           "Please check:\n" \
+                           "• Enable DMs from server members\n" \
+                           "• Make sure you haven't blocked the bot\n" \
+                           "• Check your privacy settings"
+                
+                if hasattr(ctx, 'interaction') and ctx.interaction:
+                    await ctx.interaction.edit_original_response(content=error_msg)
+                else:
+                    await initial_msg.edit(content=error_msg)
                 return
                 
         except Exception as e:
             print(f"Error in cookie command: {traceback.format_exc()}")
             await ctx.send("❌ An error occurred! Please try again or contact support.", ephemeral=True)
 
-    async def stock_autocomplete(self, interaction: discord.Interaction, current: str):
-        server = await self.db.servers.find_one({"server_id": interaction.guild.id})
-        if not server:
-            return []
-        
-        choices = [discord.app_commands.Choice(name="All Cookies", value="all")]
-        
-        for cookie_type, config in server.get("cookies", {}).items():
-            if config.get("enabled", True):
-                if current.lower() in cookie_type.lower():
-                    choices.append(discord.app_commands.Choice(
-                        name=cookie_type.title(),
-                        value=cookie_type
-                    ))
-        
-        return choices[:25]
-
     @commands.hybrid_command(name="stock", description="Check cookie stock")
-    @discord.app_commands.autocomplete(type=stock_autocomplete)
-    async def stock(self, ctx, type: str = "all"):
+    @app_commands.describe(type="The type of cookie to check stock for (leave empty for all)")
+    @app_commands.autocomplete(type=cookie_autocomplete)
+    async def stock(self, ctx, type: str = None):
         try:
             server = await self.db.servers.find_one({"server_id": ctx.guild.id})
             if not server:
@@ -372,7 +379,7 @@ class CookieCog(commands.Cog):
                 timestamp=datetime.now(timezone.utc)
             )
             
-            if type != "all":
+            if type:
                 type = type.lower()
                 if type not in server["cookies"]:
                     await ctx.send("❌ Invalid cookie type!", ephemeral=True)
@@ -386,12 +393,9 @@ class CookieCog(commands.Cog):
                     count = len(files)
                     status = "✅ Available" if count > 0 else "❌ Out of Stock"
                     
-                    cost = await self.get_user_cost(ctx.author, server, type)
-                    cooldown = await self.get_user_cooldown(ctx.author, server, type)
-                    
                     embed.add_field(
                         name=f"{type.title()}",
-                        value=f"Stock: **{count}** files\nStatus: {status}\nYour Cost: **{cost}** points\nYour Cooldown: **{cooldown}** hours",
+                        value=f"Stock: **{count}** files\nStatus: {status}\nCost: **{cookie_config['cost']}** points",
                         inline=False
                     )
                 else:
@@ -406,16 +410,11 @@ class CookieCog(commands.Cog):
                         files = [f for f in os.listdir(directory) if f.endswith('.txt')]
                         count = len(files)
                         emoji = "✅" if count > 10 else "⚠️" if count > 0 else "❌"
-                        
-                        cost = await self.get_user_cost(ctx.author, server, cookie_type)
-                        
                         embed.add_field(
                             name=cookie_type.title(),
-                            value=f"{emoji} **{count}** files\n💰 {cost} points",
+                            value=f"{emoji} **{count}** files",
                             inline=True
                         )
-                
-                embed.set_footer(text="Use /cookie to claim | Prices shown are for your role")
             
             await ctx.send(embed=embed, ephemeral=True)
         except Exception as e:
@@ -445,7 +444,12 @@ class CookieCog(commands.Cog):
                 await ctx.send("✅ You already submitted feedback for your last cookie!", ephemeral=True)
                 return
             
-            if datetime.now(timezone.utc) > last_claim["feedback_deadline"]:
+            deadline = last_claim["feedback_deadline"]
+            # Ensure deadline is timezone-aware
+            if deadline.tzinfo is None:
+                deadline = deadline.replace(tzinfo=timezone.utc)
+            
+            if datetime.now(timezone.utc) > deadline:
                 await ctx.send("❌ Feedback deadline expired! You might be blacklisted.", ephemeral=True)
                 return
             
