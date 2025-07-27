@@ -197,10 +197,13 @@ class PointsCog(commands.Cog):
                 color=discord.Color.red() if user_data.get("blacklisted") else discord.Color.green()
             )
             embed.set_thumbnail(url=user.display_avatar.url)
-            
+
             if user_data.get("blacklisted"):
                 expires = user_data.get("blacklist_expires")
                 if expires:
+                    # Ensure expires is timezone-aware
+                    if expires.tzinfo is None:
+                        expires = expires.replace(tzinfo=timezone.utc)
                     remaining = expires - datetime.now(timezone.utc)
                     days = remaining.days
                     hours = remaining.seconds // 3600
