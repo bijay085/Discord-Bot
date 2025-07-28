@@ -5,6 +5,7 @@ import platform
 import psutil
 import logging
 import asyncio
+import os
 from .views import BotControlView
 
 logger = logging.getLogger('CookieBot')
@@ -34,19 +35,43 @@ class EventHandler:
         }).to_list(None)
         
         if servers_with_announcement:
-            # Get bot statistics once
+            # Get comprehensive statistics
             total_users = await self.bot.db.users.count_documents({})
             total_cookies_claimed = await self.bot.db.statistics.find_one({"_id": "global_stats"})
             active_users_today = await self.bot.db.users.count_documents({
                 "last_active": {"$gte": datetime.now(timezone.utc) - timedelta(days=1)}
             })
+            active_users_week = await self.bot.db.users.count_documents({
+                "last_active": {"$gte": datetime.now(timezone.utc) - timedelta(days=7)}
+            })
             
-            # Get top claimed cookie
-            top_cookie = "Unknown"
+            # Get cookie stock information
+            stock_info = {}
+            total_stock = 0
+            config = await self.bot.db.config.find_one({"_id": "bot_config"})
+            if config and config.get("default_cookies"):
+                for cookie_type, cookie_config in config["default_cookies"].items():
+                    directory = cookie_config.get("directory")
+                    if directory and os.path.exists(directory):
+                        files = [f for f in os.listdir(directory) if f.endswith('.txt')]
+                        count = len(files)
+                        stock_info[cookie_type] = count
+                        total_stock += count
+            
+            # Get top cookies
+            top_cookies = []
             if total_cookies_claimed and total_cookies_claimed.get("total_claims"):
-                top_cookie_data = max(total_cookies_claimed["total_claims"].items(), 
-                                     key=lambda x: x[1], default=("Unknown", 0))
-                top_cookie = top_cookie_data[0].title()
+                sorted_cookies = sorted(total_cookies_claimed["total_claims"].items(), 
+                                      key=lambda x: x[1], reverse=True)[:5]
+                top_cookies = [(name.title(), count) for name, count in sorted_cookies]
+            
+            # Get recent activity
+            recent_claims = await self.bot.db.users.count_documents({
+                "last_claim.date": {"$gte": datetime.now(timezone.utc) - timedelta(hours=24)}
+            })
+            
+            # Get blacklist stats
+            blacklisted_users = await self.bot.db.users.count_documents({"blacklisted": True})
             
             # Send to each server's announcement channel
             for server_data in servers_with_announcement:
@@ -56,48 +81,92 @@ class EventHandler:
                 if announcement_channel:
                     try:
                         announcement_embed = discord.Embed(
-                            title="🟢 Cookie Bot is Online!",
-                            description="The bot has successfully restarted and is ready to serve cookies!",
+                            title="🟢 Cookie Bot System Status",
+                            description="```diff\n+ SYSTEM ONLINE\n+ ALL SERVICES OPERATIONAL\n```",
                             color=0x00ff00,
                             timestamp=datetime.now(timezone.utc)
                         )
                         
+                        # Server & User Statistics
                         announcement_embed.add_field(
-                            name="📊 Bot Statistics",
-                            value=f"```\n"
-                                  f"Servers    : {len(self.bot.guilds):,}\n"
-                                  f"Total Users: {sum(g.member_count for g in self.bot.guilds):,}\n"
-                                  f"Registered : {total_users:,}\n"
-                                  f"Active 24h : {active_users_today:,}\n"
+                            name="📊 Network Statistics",
+                            value=f"```yaml\n"
+                                  f"Servers      : {len(self.bot.guilds):,}\n"
+                                  f"Total Users  : {sum(g.member_count for g in self.bot.guilds):,}\n"
+                                  f"Registered   : {total_users:,}\n"
+                                  f"Active (24h) : {active_users_today:,}\n"
+                                  f"Active (7d)  : {active_users_week:,}\n"
+                                  f"Blacklisted  : {blacklisted_users:,}\n"
                                   f"```",
+                            inline=True
+                        )
+                        
+                        # Cookie Statistics
+                        announcement_embed.add_field(
+                            name="🍪 Cookie Analytics",
+                            value=f"```yaml\n"
+                                  f"Total Claims : {total_cookies_claimed.get('all_time_claims', 0) if total_cookies_claimed else 0:,}\n"
+                                  f"Claims (24h) : {recent_claims:,}\n"
+                                  f"Total Stock  : {total_stock:,} files\n"
+                                  f"Cookie Types : {len(stock_info)}\n"
+                                  f"Avg Claims   : {(total_cookies_claimed.get('all_time_claims', 0) // max(total_users, 1)) if total_cookies_claimed else 0}/user\n"
+                                  f"```",
+                            inline=True
+                        )
+                        
+                        # Stock Overview
+                        stock_text = "```diff\n"
+                        for cookie, count in sorted(stock_info.items(), key=lambda x: x[1], reverse=True)[:8]:
+                            if count > 20:
+                                stock_text += f"+ {cookie.ljust(12)}: {count:>3} ✓\n"
+                            elif count > 10:
+                                stock_text += f"! {cookie.ljust(12)}: {count:>3} ⚠\n"
+                            elif count > 0:
+                                stock_text += f"- {cookie.ljust(12)}: {count:>3} ⚠\n"
+                            else:
+                                stock_text += f"- {cookie.ljust(12)}: OUT ✗\n"
+                        stock_text += "```"
+                        
+                        announcement_embed.add_field(
+                            name="📦 Cookie Stock Levels",
+                            value=stock_text,
                             inline=False
                         )
                         
-                        announcement_embed.add_field(
-                            name="🍪 Cookie Stats",
-                            value=f"```\n"
-                                  f"Total Claims: {total_cookies_claimed.get('all_time_claims', 0) if total_cookies_claimed else 0:,}\n"
-                                  f"Top Cookie  : {top_cookie}\n"
-                                  f"Latency     : {round(self.bot.latency * 1000)}ms\n"
-                                  f"```",
-                            inline=False
-                        )
+                        # Top Cookies
+                        if top_cookies:
+                            top_text = "```yaml\n"
+                            for i, (name, count) in enumerate(top_cookies, 1):
+                                top_text += f"{i}. {name.ljust(12)}: {count:,} claims\n"
+                            top_text += "```"
+                            
+                            announcement_embed.add_field(
+                                name="🏆 Most Popular Cookies",
+                                value=top_text,
+                                inline=True
+                            )
                         
+                        # System Performance
                         announcement_embed.add_field(
-                            name="💻 System Info",
-                            value=f"```\n"
-                                  f"Python : {platform.python_version()}\n"
-                                  f"Discord: {discord.__version__}\n"
-                                  f"RAM    : {psutil.virtual_memory().percent}%\n"
-                                  f"CPU    : {psutil.cpu_percent()}%\n"
+                            name="💻 System Performance",
+                            value=f"```yaml\n"
+                                  f"Latency  : {round(self.bot.latency * 1000)}ms\n"
+                                  f"RAM      : {psutil.virtual_memory().percent}%\n"
+                                  f"CPU      : {psutil.cpu_percent()}%\n"
+                                  f"Uptime   : {self.bot.get_uptime()}\n"
+                                  f"Commands : {len(self.bot.commands)}\n"
                                   f"```",
-                            inline=False
+                            inline=True
                         )
                         
                         announcement_embed.set_thumbnail(url=self.bot.user.avatar.url)
-                        announcement_embed.set_footer(text="Cookie Bot v2.0 | Premium Edition")
+                        announcement_embed.set_footer(text="Cookie Bot v2.0 | Premium Edition | Auto-refresh available")
                         
-                        await announcement_channel.send(embed=announcement_embed)
+                        # Create view with refresh button for announcement
+                        view = AnnouncementRefreshView(self.bot)
+                        
+                        sent_message = await announcement_channel.send(embed=announcement_embed, view=view)
+                        view.message = sent_message
                     except discord.Forbidden:
                         print(f"❌ No permission to send in {server_data.get('server_name', 'Unknown')} announcement channel")
                     except Exception as e:
@@ -376,3 +445,196 @@ class EventHandler:
                 await webhook.send(embed=error_details)
         
         await ctx.send(embed=error_embed, ephemeral=True)
+
+class AnnouncementRefreshView(discord.ui.View):
+    def __init__(self, bot):
+        super().__init__(timeout=None)  # No timeout
+        self.bot = bot
+        self.message = None
+        self.cooldowns = {}
+        self.spam_violations = {}
+        
+    @discord.ui.button(label="Refresh Stats", style=discord.ButtonStyle.primary, emoji="🔄")
+    async def refresh_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        user_id = interaction.user.id
+        now = datetime.now(timezone.utc)
+        
+        # Check if user has a penalty
+        if user_id in self.spam_violations:
+            penalty_end = self.spam_violations[user_id]
+            if now < penalty_end:
+                remaining_minutes = (penalty_end - now).total_seconds() / 60
+                await interaction.response.send_message(
+                    f"🚫 You have been temporarily restricted for spamming!\n"
+                    f"⏰ Try again in **{remaining_minutes:.1f}** minutes.",
+                    ephemeral=True
+                )
+                return
+            else:
+                del self.spam_violations[user_id]
+        
+        # Check cooldown
+        if user_id in self.cooldowns:
+            last_refresh, violation_count = self.cooldowns[user_id]
+            time_passed = (now - last_refresh).total_seconds()
+            
+            if time_passed < 120:  # 2 minute cooldown
+                remaining = 120 - time_passed
+                new_violation_count = violation_count + 1
+                self.cooldowns[user_id] = (last_refresh, new_violation_count)
+                
+                if new_violation_count >= 3:
+                    penalty_end = now + timedelta(minutes=20)
+                    self.spam_violations[user_id] = penalty_end
+                    if user_id in self.cooldowns:
+                        del self.cooldowns[user_id]
+                    
+                    await interaction.response.send_message(
+                        f"🚫 **SPAM DETECTED!**\n"
+                        f"You have been restricted for **20 minutes** for spamming.\n",
+                        ephemeral=True
+                    )
+                    return
+                else:
+                    minutes = int(remaining // 60)
+                    seconds = int(remaining % 60)
+                    await interaction.response.send_message(
+                        f"⏰ Please wait **{minutes}m {seconds}s** before refreshing!\n"
+                        f"⚠️ Warning: {3 - new_violation_count} more attempts = 20min restriction.",
+                        ephemeral=True
+                    )
+                    return
+        
+        # Update cooldown
+        self.cooldowns[user_id] = (now, 0)
+        
+        # Defer response
+        await interaction.response.defer()
+        
+        # Get updated statistics
+        total_users = await self.bot.db.users.count_documents({})
+        total_cookies_claimed = await self.bot.db.statistics.find_one({"_id": "global_stats"})
+        active_users_today = await self.bot.db.users.count_documents({
+            "last_active": {"$gte": datetime.now(timezone.utc) - timedelta(days=1)}
+        })
+        active_users_week = await self.bot.db.users.count_documents({
+            "last_active": {"$gte": datetime.now(timezone.utc) - timedelta(days=7)}
+        })
+        
+        # Get cookie stock information
+        stock_info = {}
+        total_stock = 0
+        config = await self.bot.db.config.find_one({"_id": "bot_config"})
+        if config and config.get("default_cookies"):
+            for cookie_type, cookie_config in config["default_cookies"].items():
+                directory = cookie_config.get("directory")
+                if directory and os.path.exists(directory):
+                    files = [f for f in os.listdir(directory) if f.endswith('.txt')]
+                    count = len(files)
+                    stock_info[cookie_type] = count
+                    total_stock += count
+        
+        # Get top cookies
+        top_cookies = []
+        if total_cookies_claimed and total_cookies_claimed.get("total_claims"):
+            sorted_cookies = sorted(total_cookies_claimed["total_claims"].items(), 
+                                  key=lambda x: x[1], reverse=True)[:5]
+            top_cookies = [(name.title(), count) for name, count in sorted_cookies]
+        
+        # Get recent activity
+        recent_claims = await self.bot.db.users.count_documents({
+            "last_claim.date": {"$gte": datetime.now(timezone.utc) - timedelta(hours=24)}
+        })
+        
+        # Get blacklist stats
+        blacklisted_users = await self.bot.db.users.count_documents({"blacklisted": True})
+        
+        # Create new embed
+        announcement_embed = discord.Embed(
+            title="🟢 Cookie Bot System Status",
+            description="```diff\n+ SYSTEM ONLINE\n+ ALL SERVICES OPERATIONAL\n```",
+            color=0x00ff00,
+            timestamp=datetime.now(timezone.utc)
+        )
+        
+        # Server & User Statistics
+        announcement_embed.add_field(
+            name="📊 Network Statistics",
+            value=f"```yaml\n"
+                  f"Servers      : {len(self.bot.guilds):,}\n"
+                  f"Total Users  : {sum(g.member_count for g in self.bot.guilds):,}\n"
+                  f"Registered   : {total_users:,}\n"
+                  f"Active (24h) : {active_users_today:,}\n"
+                  f"Active (7d)  : {active_users_week:,}\n"
+                  f"Blacklisted  : {blacklisted_users:,}\n"
+                  f"```",
+            inline=True
+        )
+        
+        # Cookie Statistics
+        announcement_embed.add_field(
+            name="🍪 Cookie Analytics",
+            value=f"```yaml\n"
+                  f"Total Claims : {total_cookies_claimed.get('all_time_claims', 0) if total_cookies_claimed else 0:,}\n"
+                  f"Claims (24h) : {recent_claims:,}\n"
+                  f"Total Stock  : {total_stock:,} files\n"
+                  f"Cookie Types : {len(stock_info)}\n"
+                  f"Avg Claims   : {(total_cookies_claimed.get('all_time_claims', 0) // max(total_users, 1)) if total_cookies_claimed else 0}/user\n"
+                  f"```",
+            inline=True
+        )
+        
+        # Stock Overview
+        stock_text = "```diff\n"
+        for cookie, count in sorted(stock_info.items(), key=lambda x: x[1], reverse=True)[:8]:
+            if count > 20:
+                stock_text += f"+ {cookie.ljust(12)}: {count:>3} ✓\n"
+            elif count > 10:
+                stock_text += f"! {cookie.ljust(12)}: {count:>3} ⚠\n"
+            elif count > 0:
+                stock_text += f"- {cookie.ljust(12)}: {count:>3} ⚠\n"
+            else:
+                stock_text += f"- {cookie.ljust(12)}: OUT ✗\n"
+        stock_text += "```"
+        
+        announcement_embed.add_field(
+            name="📦 Cookie Stock Levels",
+            value=stock_text,
+            inline=False
+        )
+        
+        # Top Cookies
+        if top_cookies:
+            top_text = "```yaml\n"
+            for i, (name, count) in enumerate(top_cookies, 1):
+                top_text += f"{i}. {name.ljust(12)}: {count:,} claims\n"
+            top_text += "```"
+            
+            announcement_embed.add_field(
+                name="🏆 Most Popular Cookies",
+                value=top_text,
+                inline=True
+            )
+        
+        # System Performance
+        announcement_embed.add_field(
+            name="💻 System Performance",
+            value=f"```yaml\n"
+                  f"Latency  : {round(self.bot.latency * 1000)}ms\n"
+                  f"RAM      : {psutil.virtual_memory().percent}%\n"
+                  f"CPU      : {psutil.cpu_percent()}%\n"
+                  f"Uptime   : {self.bot.get_uptime()}\n"
+                  f"Commands : {len(self.bot.commands)}\n"
+                  f"```",
+            inline=True
+        )
+        
+        announcement_embed.set_thumbnail(url=self.bot.user.avatar.url)
+        announcement_embed.set_footer(text="Cookie Bot v2.0 | Premium Edition | Auto-refresh available")
+        
+        # Update message
+        await interaction.followup.edit_message(
+            message_id=self.message.id,
+            embed=announcement_embed,
+            view=self
+        )

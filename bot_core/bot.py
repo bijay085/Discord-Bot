@@ -54,8 +54,6 @@ class CookieBot(commands.Bot):
         self.active_claims = {}
         self.db_handler = DatabaseHandler(self)
         self.event_handler = EventHandler(self)
-        self.status_cooldowns = {}  # Track refresh cooldowns
-        self.spam_violations = {}  # Track spam attempts
         
     async def setup_hook(self):
         print("🚀 Initializing...")
@@ -257,94 +255,51 @@ class CookieBot(commands.Bot):
         
         # Check if message is ONLY a mention of the bot
         if message.content.strip() == f"<@{self.user.id}>" or message.content.strip() == f"<@!{self.user.id}>":
-            # Create the status view with refresh button
-            view = StatusRefreshView(self, message.author.id)
+            # Create simple status embed for mentions
+            embed = discord.Embed(
+                title="👋 Hey there! I'm Cookie Bot!",
+                description="Your premium cookie distribution system",
+                color=discord.Color.blue(),
+                timestamp=datetime.now(timezone.utc)
+            )
             
-            # Get initial embed
-            embed = await self.create_status_embed()
+            # Basic info
+            embed.add_field(
+                name="🤖 Bot Info",
+                value=f"**Uptime:** {self.get_uptime()}\n"
+                      f"**Ping:** {round(self.latency * 1000)}ms\n"
+                      f"**Servers:** {len(self.guilds)}",
+                inline=True
+            )
             
-            # Send the message
-            sent_message = await message.reply(embed=embed, view=view, mention_author=False)
-            view.message = sent_message
+            # Quick stats
+            total_cookies = await self.get_total_cookies()
+            embed.add_field(
+                name="📊 Quick Stats",
+                value=f"**Cookies Served:** {total_cookies:,}\n"
+                      f"**Total Users:** {sum(g.member_count for g in self.guilds):,}\n"
+                      f"**Commands:** {len(self.commands)}",
+                inline=True
+            )
+            
+            # Help info
+            embed.add_field(
+                name="🔧 Getting Started",
+                value="• `/help` - View all commands\n"
+                      "• `/cookie` - Claim a cookie\n"
+                      "• `/daily` - Get daily points\n"
+                      "• `/points` - Check balance",
+                inline=False
+            )
+            
+            embed.set_thumbnail(url=self.user.avatar.url)
+            embed.set_footer(text="Use /help for detailed commands • Cookie Bot v2.0")
+            
+            await message.reply(embed=embed, mention_author=False)
             return
         
         # Process commands normally
         await self.process_commands(message)
-    
-    async def create_status_embed(self):
-        """Create the status embed with current statistics"""
-        # Get bot statistics
-        total_cookies = await self.get_total_cookies()
-        total_users = await self.db.users.count_documents({})
-        active_users = await self.db.users.count_documents({
-            "last_active": {"$gte": datetime.now(timezone.utc) - timedelta(days=1)}
-        })
-        
-        # Create stats embed
-        embed = discord.Embed(
-            title="🍪 Cookie Bot Status",
-            color=discord.Color.blue(),
-            timestamp=datetime.now(timezone.utc)
-        )
-        
-        embed.add_field(
-            name="⏰ Uptime",
-            value=f"```{self.get_uptime()}```",
-            inline=True
-        )
-        
-        embed.add_field(
-            name="📡 Latency",
-            value=f"```{round(self.latency * 1000)}ms```",
-            inline=True
-        )
-        
-        embed.add_field(
-            name="📊 Servers",
-            value=f"```{len(self.guilds):,}```",
-            inline=True
-        )
-        
-        embed.add_field(
-            name="👥 Total Users",
-            value=f"```{sum(g.member_count for g in self.guilds):,}```",
-            inline=True
-        )
-        
-        embed.add_field(
-            name="📝 Registered",
-            value=f"```{total_users:,}```",
-            inline=True
-        )
-        
-        embed.add_field(
-            name="🟢 Active (24h)",
-            value=f"```{active_users:,}```",
-            inline=True
-        )
-        
-        embed.add_field(
-            name="🍪 Total Cookies Claimed",
-            value=f"```{total_cookies:,}```",
-            inline=False
-        )
-        
-        embed.add_field(
-            name="💾 Memory Usage",
-            value=f"```{psutil.virtual_memory().percent}%```",
-            inline=True
-        )
-        
-        embed.add_field(
-            name="⚡ Commands",
-            value=f"```{len(self.commands)}```",
-            inline=True
-        )
-        
-        embed.set_author(name=self.user.name, icon_url=self.user.avatar.url)
-        embed.set_footer(text="Use /help to see all commands")
-        
-        return embed
     
     async def get_total_cookies(self):
         """Get total cookies distributed"""
@@ -406,87 +361,3 @@ class CookieBot(commands.Bot):
             parts.append(f"{seconds}s")
             
         return " ".join(parts)
-
-class StatusRefreshView(discord.ui.View):
-    def __init__(self, bot, user_id):
-        super().__init__(timeout=None)  # No timeout - button works forever
-        self.bot = bot
-        self.user_id = user_id
-        self.message = None
-        
-    @discord.ui.button(label="Refresh", style=discord.ButtonStyle.primary, emoji="🔄")
-    async def refresh_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Check cooldown
-        user_id = interaction.user.id
-        now = datetime.now(timezone.utc)
-        
-        # Check if user has a penalty
-        if user_id in self.bot.spam_violations:
-            penalty_end = self.bot.spam_violations[user_id]
-            if now < penalty_end:
-                remaining_minutes = (penalty_end - now).total_seconds() / 60
-                await interaction.response.send_message(
-                    f"🚫 You have been temporarily restricted for spamming!\n"
-                    f"⏰ Try again in **{remaining_minutes:.1f}** minutes.",
-                    ephemeral=True
-                )
-                return
-            else:
-                # Penalty expired, remove it
-                del self.bot.spam_violations[user_id]
-        
-        # Check regular cooldown
-        if user_id in self.bot.status_cooldowns:
-            last_refresh, violation_count = self.bot.status_cooldowns[user_id]
-            time_passed = (now - last_refresh).total_seconds()
-            
-            if time_passed < 120:  # 2 minute cooldown
-                remaining = 120 - time_passed
-                
-                # Increment violation count
-                new_violation_count = violation_count + 1
-                self.bot.status_cooldowns[user_id] = (last_refresh, new_violation_count)
-                
-                # Check if they've tried 3 times during cooldown
-                if new_violation_count >= 3:
-                    # Apply 20-minute penalty
-                    penalty_end = now + timedelta(minutes=20)
-                    self.bot.spam_violations[user_id] = penalty_end
-                    
-                    # Reset their cooldown tracking
-                    if user_id in self.bot.status_cooldowns:
-                        del self.bot.status_cooldowns[user_id]
-                    
-                    await interaction.response.send_message(
-                        f"🚫 **SPAM DETECTED!**\n"
-                        f"You have been restricted for **20 minutes** for attempting to spam the refresh button.\n"
-                        f"Please be patient and wait for cooldowns!",
-                        ephemeral=True
-                    )
-                    return
-                else:
-                    # Show remaining cooldown
-                    minutes = int(remaining // 60)
-                    seconds = int(remaining % 60)
-                    await interaction.response.send_message(
-                        f"⏰ Please wait **{minutes}m {seconds}s** before refreshing again!\n"
-                        f"⚠️ Warning: {3 - new_violation_count} more attempts during cooldown will result in a 20-minute restriction.",
-                        ephemeral=True
-                    )
-                    return
-        
-        # Update cooldown (last refresh time, violation count)
-        self.bot.status_cooldowns[user_id] = (now, 0)
-        
-        # Defer the response
-        await interaction.response.defer()
-        
-        # Get new embed
-        new_embed = await self.bot.create_status_embed()
-        
-        # Update the message
-        await interaction.followup.edit_message(
-            message_id=self.message.id,
-            embed=new_embed,
-            view=self
-        )
