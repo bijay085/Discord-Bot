@@ -75,11 +75,41 @@ class InviteCog(commands.Cog):
         self.verified_role_id = 1349289354329198623
         self.invite_cache_update.start()
         self.pending_rewards = {}
+        self.tracked_members = {}
         
     async def log_action(self, guild_id: int, message: str, color: discord.Color = discord.Color.blue()):
         cookie_cog = self.bot.get_cog("CookieCog")
         if cookie_cog:
             await cookie_cog.log_action(guild_id, message, color)
+    
+    async def get_or_create_user(self, user_id: int, username: str):
+        user = await self.db.users.find_one({"user_id": user_id})
+        if not user:
+            user = {
+                "user_id": user_id,
+                "username": username,
+                "points": 0,
+                "total_earned": 0,
+                "total_spent": 0,
+                "trust_score": 50,
+                "account_created": datetime.now(timezone.utc),
+                "first_seen": datetime.now(timezone.utc),
+                "last_active": datetime.now(timezone.utc),
+                "daily_claimed": None,
+                "invite_count": 0,
+                "pending_invites": 0,
+                "verified_invites": 0,
+                "fake_invites": 0,
+                "last_claim": None,
+                "cookie_claims": {},
+                "weekly_claims": 0,
+                "total_claims": 0,
+                "blacklisted": False,
+                "blacklist_expires": None,
+                "invited_users": []
+            }
+            await self.db.users.insert_one(user)
+        return user
     
     @tasks.loop(minutes=30)
     async def invite_cache_update(self):
@@ -140,33 +170,7 @@ class InviteCog(commands.Cog):
                     break
             
             if used_invite and used_invite.inviter:
-                inviter_data = await self.db.users.find_one({"user_id": used_invite.inviter.id})
-                
-                if not inviter_data:
-                    inviter_data = {
-                        "user_id": used_invite.inviter.id,
-                        "username": str(used_invite.inviter),
-                        "points": 0,
-                        "total_earned": 0,
-                        "total_spent": 0,
-                        "trust_score": 50,
-                        "account_created": datetime.now(timezone.utc),
-                        "first_seen": datetime.now(timezone.utc),
-                        "last_active": datetime.now(timezone.utc),
-                        "daily_claimed": None,
-                        "invite_count": 0,
-                        "pending_invites": 0,
-                        "verified_invites": 0,
-                        "fake_invites": 0,
-                        "last_claim": None,
-                        "cookie_claims": {},
-                        "weekly_claims": 0,
-                        "total_claims": 0,
-                        "blacklisted": False,
-                        "blacklist_expires": None,
-                        "invited_users": []
-                    }
-                    await self.db.users.insert_one(inviter_data)
+                inviter_data = await self.get_or_create_user(used_invite.inviter.id, str(used_invite.inviter))
                 
                 await self.db.users.update_one(
                     {"user_id": used_invite.inviter.id},
@@ -176,10 +180,17 @@ class InviteCog(commands.Cog):
                             "user_id": member.id,
                             "username": str(member),
                             "joined_at": datetime.now(timezone.utc),
-                            "verified": False
+                            "verified": False,
+                            "invite_code": used_invite.code
                         }}
                     }
                 )
+                
+                self.tracked_members[member.id] = {
+                    "inviter_id": used_invite.inviter.id,
+                    "joined_at": datetime.now(timezone.utc),
+                    "guild_id": guild.id
+                }
                 
                 embed = discord.Embed(
                     title="👋 New Member Joined!",
@@ -235,52 +246,86 @@ class InviteCog(commands.Cog):
             
             if not had_role and has_role:
                 config = await self.db.config.find_one({"_id": "bot_config"})
-                invite_points = config["point_rates"]["invite"]
+                invite_points = config.get("point_rates", {}).get("invite", 2)
+                
+                member_data = self.tracked_members.get(after.id)
+                if member_data:
+                    inviter_id = member_data["inviter_id"]
+                    
+                    await self.db.users.update_one(
+                        {
+                            "user_id": inviter_id,
+                            "invited_users.user_id": after.id
+                        },
+                        {
+                            "$set": {"invited_users.$.verified": True},
+                            "$inc": {
+                                "pending_invites": -1,
+                                "verified_invites": 1,
+                                "points": invite_points,
+                                "total_earned": invite_points
+                            }
+                        }
+                    )
+                    
+                    inviter = self.bot.get_user(inviter_id)
+                    if inviter:
+                        embed = discord.Embed(
+                            title="💰 Invite Reward Earned!",
+                            description=f"{after.mention} has been verified!",
+                            color=discord.Color.green(),
+                            timestamp=datetime.now(timezone.utc)
+                        )
+                        embed.add_field(name="Points Earned", value=f"**+{invite_points}** points", inline=True)
+                        embed.add_field(name="Member", value=after.name, inline=True)
+                        embed.set_thumbnail(url=after.display_avatar.url)
+                        
+                        await self.log_action(
+                            after.guild.id,
+                            f"✅ {inviter.mention} received **{invite_points}** points for inviting {after.mention} (Verified)",
+                            discord.Color.green()
+                        )
+                        
+                        try:
+                            await inviter.send(embed=embed)
+                        except:
+                            pass
+                    
+                    del self.tracked_members[after.id]
+                else:
+                    user_data = await self.db.users.find_one({"invited_users.user_id": after.id})
+                    if user_data:
+                        for invited in user_data.get("invited_users", []):
+                            if invited["user_id"] == after.id and not invited.get("verified"):
+                                await self.db.users.update_one(
+                                    {
+                                        "user_id": user_data["user_id"],
+                                        "invited_users.user_id": after.id
+                                    },
+                                    {
+                                        "$set": {"invited_users.$.verified": True},
+                                        "$inc": {
+                                            "pending_invites": -1,
+                                            "verified_invites": 1,
+                                            "points": invite_points,
+                                            "total_earned": invite_points
+                                        }
+                                    }
+                                )
+                                
+                                inviter = self.bot.get_user(user_data["user_id"])
+                                if inviter:
+                                    await self.log_action(
+                                        after.guild.id,
+                                        f"✅ {inviter.mention} received **{invite_points}** points for inviting {after.mention} (Verified - Database Recovery)",
+                                        discord.Color.green()
+                                    )
+                                break
                 
                 if after.id in self.pending_rewards:
                     for inviter_id in list(self.pending_rewards.keys()):
                         if after.id in self.pending_rewards[inviter_id]:
                             self.pending_rewards[inviter_id].remove(after.id)
-                            
-                            await self.db.users.update_one(
-                                {
-                                    "user_id": inviter_id,
-                                    "invited_users.user_id": after.id
-                                },
-                                {
-                                    "$set": {"invited_users.$.verified": True},
-                                    "$inc": {
-                                        "pending_invites": -1,
-                                        "verified_invites": 1,
-                                        "points": invite_points,
-                                        "total_earned": invite_points
-                                    }
-                                }
-                            )
-                            
-                            inviter = self.bot.get_user(inviter_id)
-                            if inviter:
-                                embed = discord.Embed(
-                                    title="💰 Invite Reward Earned!",
-                                    description=f"{after.mention} has been verified!",
-                                    color=discord.Color.green(),
-                                    timestamp=datetime.now(timezone.utc)
-                                )
-                                embed.add_field(name="Points Earned", value=f"**+{invite_points}** points", inline=True)
-                                embed.add_field(name="Member", value=after.name, inline=True)
-                                embed.set_thumbnail(url=after.display_avatar.url)
-                                
-                                await self.log_action(
-                                    after.guild.id,
-                                    f"✅ {inviter.mention} received **{invite_points}** points for inviting {after.mention} (Verified)",
-                                    discord.Color.green()
-                                )
-                                
-                                try:
-                                    await inviter.send(embed=embed)
-                                except:
-                                    pass
-                            
                             if not self.pending_rewards[inviter_id]:
                                 del self.pending_rewards[inviter_id]
                                 
@@ -292,6 +337,9 @@ class InviteCog(commands.Cog):
         try:
             if member.bot:
                 return
+            
+            if member.id in self.tracked_members:
+                del self.tracked_members[member.id]
             
             user_data = await self.db.users.find_one({"invited_users.user_id": member.id})
             if user_data:
@@ -345,7 +393,7 @@ class InviteCog(commands.Cog):
             user_data = await self.db.users.find_one({"user_id": user.id})
             
             config = await self.db.config.find_one({"_id": "bot_config"})
-            invite_points = config["point_rates"]["invite"]
+            invite_points = config.get("point_rates", {}).get("invite", 2)
             
             embed = discord.Embed(
                 title=f"📨 Invite Statistics: {user.display_name}",
@@ -510,6 +558,53 @@ class InviteCog(commands.Cog):
             
         except Exception as e:
             print(f"Error resetting invites: {e}")
+            await ctx.send("❌ An error occurred!", ephemeral=True)
+    
+    @commands.hybrid_command(name="syncvites", description="Sync invite data from database (Owner only)")
+    @commands.is_owner()
+    async def syncvites(self, ctx):
+        try:
+            await ctx.defer()
+            
+            synced = 0
+            async for user_data in self.db.users.find({"invited_users": {"$exists": True, "$ne": []}}):
+                for invited in user_data.get("invited_users", []):
+                    if not invited.get("verified"):
+                        member_id = invited["user_id"]
+                        member = ctx.guild.get_member(member_id)
+                        
+                        if member:
+                            verified_role = ctx.guild.get_role(self.verified_role_id)
+                            if verified_role and verified_role in member.roles:
+                                config = await self.db.config.find_one({"_id": "bot_config"})
+                                invite_points = config.get("point_rates", {}).get("invite", 2)
+                                
+                                await self.db.users.update_one(
+                                    {
+                                        "user_id": user_data["user_id"],
+                                        "invited_users.user_id": member_id
+                                    },
+                                    {
+                                        "$set": {"invited_users.$.verified": True},
+                                        "$inc": {
+                                            "pending_invites": -1,
+                                            "verified_invites": 1,
+                                            "points": invite_points,
+                                            "total_earned": invite_points
+                                        }
+                                    }
+                                )
+                                synced += 1
+            
+            embed = discord.Embed(
+                title="✅ Invite Sync Complete",
+                description=f"Synced **{synced}** pending invites that were already verified",
+                color=discord.Color.green()
+            )
+            await ctx.send(embed=embed)
+            
+        except Exception as e:
+            print(f"Error syncing invites: {e}")
             await ctx.send("❌ An error occurred!", ephemeral=True)
 
 async def setup(bot):
