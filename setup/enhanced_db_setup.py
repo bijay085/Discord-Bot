@@ -1,3 +1,7 @@
+# setup/enhanced_db_setup.py
+# Location: setup/enhanced_db_setup.py
+# Description: Enhanced database setup with absolute path handling
+
 import asyncio
 import motor.motor_asyncio
 from datetime import datetime, timezone
@@ -17,6 +21,9 @@ class EnhancedDatabaseSetup:
         
         self.client = motor.motor_asyncio.AsyncIOMotorClient(self.MONGODB_URI)
         self.db = self.client[self.DATABASE_NAME]
+        
+        # Get absolute base path
+        self.base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         
     async def setup_collections(self):
         print(f"🔧 Setting up database: {self.DATABASE_NAME}")
@@ -74,6 +81,10 @@ class EnhancedDatabaseSetup:
             ],
             'transactions': [
                 {'keys': [('user_id', 1, 'timestamp', -1)], 'unique': False},
+                {'keys': [('type', 1)], 'unique': False}
+            ],
+            'analytics': [
+                {'keys': [('timestamp', -1)], 'unique': False},
                 {'keys': [('type', 1)], 'unique': False}
             ]
         }
@@ -178,12 +189,14 @@ class EnhancedDatabaseSetup:
             print("✅ Updated bot configuration")
             
     def get_default_cookies(self):
-        base_dir = "cookies"
+        # Use absolute paths
+        base_cookie_dir = os.path.join(self.base_path, "cookies")
+        
         return {
             "netflix": {
                 "cost": 5, 
                 "cooldown": 72, 
-                "directory": f"{base_dir}/netflix", 
+                "directory": os.path.join(base_cookie_dir, "netflix"), 
                 "enabled": True,
                 "description": "Premium Netflix accounts",
                 "emoji": "🎬",
@@ -192,7 +205,7 @@ class EnhancedDatabaseSetup:
             "spotify": {
                 "cost": 3, 
                 "cooldown": 48, 
-                "directory": f"{base_dir}/spotify", 
+                "directory": os.path.join(base_cookie_dir, "spotify"), 
                 "enabled": True,
                 "description": "Premium Spotify accounts",
                 "emoji": "🎵",
@@ -201,7 +214,7 @@ class EnhancedDatabaseSetup:
             "prime": {
                 "cost": 4, 
                 "cooldown": 72, 
-                "directory": f"{base_dir}/prime", 
+                "directory": os.path.join(base_cookie_dir, "prime"), 
                 "enabled": True,
                 "description": "Amazon Prime accounts",
                 "emoji": "📦",
@@ -210,7 +223,7 @@ class EnhancedDatabaseSetup:
             "jiohotstar": {
                 "cost": 3, 
                 "cooldown": 48, 
-                "directory": f"{base_dir}/jiohotstar", 
+                "directory": os.path.join(base_cookie_dir, "jiohotstar"), 
                 "enabled": True,
                 "description": "JioHotstar Premium accounts",
                 "emoji": "⭐",
@@ -219,7 +232,7 @@ class EnhancedDatabaseSetup:
             "tradingview": {
                 "cost": 8, 
                 "cooldown": 96, 
-                "directory": f"{base_dir}/tradingview", 
+                "directory": os.path.join(base_cookie_dir, "tradingview"), 
                 "enabled": True,
                 "description": "TradingView Pro accounts",
                 "emoji": "📈",
@@ -228,7 +241,7 @@ class EnhancedDatabaseSetup:
             "chatgpt": {
                 "cost": 10, 
                 "cooldown": 96, 
-                "directory": f"{base_dir}/chatgpt", 
+                "directory": os.path.join(base_cookie_dir, "chatgpt"), 
                 "enabled": True,
                 "description": "ChatGPT Plus accounts",
                 "emoji": "🤖",
@@ -237,7 +250,7 @@ class EnhancedDatabaseSetup:
             "claude": {
                 "cost": 12, 
                 "cooldown": 120, 
-                "directory": f"{base_dir}/claude", 
+                "directory": os.path.join(base_cookie_dir, "claude"), 
                 "enabled": True,
                 "description": "Claude Pro accounts",
                 "emoji": "🧠",
@@ -246,7 +259,7 @@ class EnhancedDatabaseSetup:
             "peacock": {
                 "cost": 4, 
                 "cooldown": 72, 
-                "directory": f"{base_dir}/peacock", 
+                "directory": os.path.join(base_cookie_dir, "peacock"), 
                 "enabled": True,
                 "description": "Peacock Premium accounts",
                 "emoji": "🦚",
@@ -255,7 +268,7 @@ class EnhancedDatabaseSetup:
             "crunchyroll": {
                 "cost": 4, 
                 "cooldown": 48, 
-                "directory": f"{base_dir}/crunchyroll", 
+                "directory": os.path.join(base_cookie_dir, "crunchyroll"), 
                 "enabled": True,
                 "description": "Crunchyroll Premium accounts",
                 "emoji": "🍙",
@@ -264,7 +277,7 @@ class EnhancedDatabaseSetup:
             "canalplus": {
                 "cost": 6, 
                 "cooldown": 72, 
-                "directory": f"{base_dir}/canalplus", 
+                "directory": os.path.join(base_cookie_dir, "canalplus"), 
                 "enabled": True,
                 "description": "Canal+ Premium accounts",
                 "emoji": "📺",
@@ -460,7 +473,7 @@ class EnhancedDatabaseSetup:
     async def create_directories(self):
         print("\n📁 Creating cookie directories...")
         
-        base_dir = Path("cookies")
+        base_dir = Path(self.base_path) / "cookies"
         base_dir.mkdir(exist_ok=True)
         
         cookies = self.get_default_cookies()

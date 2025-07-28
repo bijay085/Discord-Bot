@@ -1,3 +1,7 @@
+# cogs/feedback.py
+# Location: cogs/feedback.py
+# Description: Feedback system with improved error handling and deadline checking
+
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands
@@ -135,58 +139,72 @@ class FeedbackCog(commands.Cog):
             print(f"Error in process_feedback_submission: {e}")
             await interaction.response.send_message("❌ Error submitting feedback!", ephemeral=True)
     
-    @tasks.loop(minutes=5)
+    @tasks.loop(minutes=1)
     async def check_feedback_deadlines(self):
         try:
             now = datetime.now(timezone.utc)
             
-            async for user in self.db.users.find({
-                "last_claim": {"$exists": True},
+            # Query only users with pending feedback and expired deadlines
+            cursor = self.db.users.find({
                 "last_claim.feedback_given": False,
+                "last_claim.feedback_deadline": {"$lt": now},
                 "blacklisted": False
-            }):
-                last_claim = user.get("last_claim")
-                if last_claim and last_claim.get("feedback_deadline"):
-                    deadline = last_claim["feedback_deadline"]
-                    if deadline.tzinfo is None:
-                        deadline = deadline.replace(tzinfo=timezone.utc)
-                    
-                    if now > deadline:
-                        await self.db.users.update_one(
-                            {"user_id": user["user_id"]},
-                            {
-                                "$set": {
-                                    "blacklisted": True,
-                                    "blacklist_expires": now + timedelta(days=30),
-                                    "statistics.feedback_streak": 0
-                                }
-                            }
-                        )
-                        
-                        guild_id = last_claim.get("server_id")
-                        if guild_id:
-                            await self.log_action(
-                                guild_id,
-                                f"🚫 <@{user['user_id']}> blacklisted for not providing feedback",
-                                discord.Color.red()
-                            )
-                            
-                            try:
-                                user_obj = self.bot.get_user(user["user_id"])
-                                if user_obj and user.get("preferences", {}).get("dm_notifications", True):
-                                    embed = discord.Embed(
-                                        title="🚫 You've been blacklisted!",
-                                        description="You failed to provide feedback within the deadline.",
-                                        color=discord.Color.red()
-                                    )
-                                    embed.add_field(name="Duration", value="30 days", inline=True)
-                                    embed.add_field(name="Expires", value=f"<t:{int((now + timedelta(days=30)).timestamp())}:R>", inline=True)
-                                    await user_obj.send(embed=embed)
-                            except:
-                                pass
-                                
+            })
+            
+            # Process in batches to prevent memory issues
+            batch = []
+            async for user in cursor:
+                batch.append(user)
+                if len(batch) >= 10:
+                    await self._process_deadline_batch(batch, now)
+                    batch = []
+            
+            # Process remaining users
+            if batch:
+                await self._process_deadline_batch(batch, now)
+                
         except Exception as e:
             print(f"Error in feedback check: {e}")
+    
+    async def _process_deadline_batch(self, users, now):
+        for user in users:
+            try:
+                last_claim = user.get("last_claim")
+                if last_claim and last_claim.get("feedback_deadline"):
+                    await self.db.users.update_one(
+                        {"user_id": user["user_id"]},
+                        {
+                            "$set": {
+                                "blacklisted": True,
+                                "blacklist_expires": now + timedelta(days=30),
+                                "statistics.feedback_streak": 0
+                            }
+                        }
+                    )
+                    
+                    guild_id = last_claim.get("server_id")
+                    if guild_id:
+                        await self.log_action(
+                            guild_id,
+                            f"🚫 <@{user['user_id']}> blacklisted for not providing feedback",
+                            discord.Color.red()
+                        )
+                        
+                        try:
+                            user_obj = self.bot.get_user(user["user_id"])
+                            if user_obj and user.get("preferences", {}).get("dm_notifications", True):
+                                embed = discord.Embed(
+                                    title="🚫 You've been blacklisted!",
+                                    description="You failed to provide feedback within the deadline.",
+                                    color=discord.Color.red()
+                                )
+                                embed.add_field(name="Duration", value="30 days", inline=True)
+                                embed.add_field(name="Expires", value=f"<t:{int((now + timedelta(days=30)).timestamp())}:R>", inline=True)
+                                await user_obj.send(embed=embed)
+                        except:
+                            pass
+            except Exception as e:
+                print(f"Error processing user {user.get('user_id')}: {e}")
     
     @commands.hybrid_command(name="feedback", description="Submit feedback with interactive form")
     async def feedback(self, ctx):
@@ -283,95 +301,101 @@ class FeedbackCog(commands.Cog):
             return
             
         if message.attachments and message.channel.type == discord.ChannelType.text:
-            server = await self.db.servers.find_one({"server_id": message.guild.id})
-            if server and message.channel.id == server["channels"].get("feedback"):
-                user_data = await self.db.users.find_one({"user_id": message.author.id})
-                if user_data and user_data.get("last_claim"):
-                    last_claim = user_data["last_claim"]
-                    
-                    image_extensions = ['.png', '.jpg', '.jpeg', '.gif', '.webp']
-                    has_image = any(att.filename.lower().endswith(ext) for att in message.attachments for ext in image_extensions)
-                    
-                    if has_image:
-                        cookie_type = last_claim.get("type", "unknown")
+            try:
+                server = await self.db.servers.find_one({"server_id": message.guild.id})
+                if server and message.channel.id == server["channels"].get("feedback"):
+                    user_data = await self.db.users.find_one({"user_id": message.author.id})
+                    if user_data and user_data.get("last_claim"):
+                        last_claim = user_data["last_claim"]
                         
-                        if last_claim.get("text_feedback_only"):
-                            # User already submitted text feedback (0.25), this is just the screenshot (0.5)
-                            bonus = 0.5
-                            embed_title = "📸 Screenshot Added to Feedback!"
-                            trust_text = f"+{bonus} points (Total: 0.75)"
-                        else:
-                            # User is submitting screenshot without text feedback (only 0.5)
-                            bonus = 0.5
-                            embed_title = "✅ Screenshot Feedback Received!"
-                            trust_text = f"+{bonus} points"
+                        image_extensions = ['.png', '.jpg', '.jpeg', '.gif', '.webp']
+                        has_image = any(att.filename.lower().endswith(ext) for att in message.attachments for ext in image_extensions)
+                        
+                        if has_image:
+                            cookie_type = last_claim.get("type", "unknown")
+                            
+                            if last_claim.get("text_feedback_only"):
+                                # User already submitted text feedback (0.25), this is just the screenshot (0.5)
+                                bonus = 0.5
+                                embed_title = "📸 Screenshot Added to Feedback!"
+                                trust_text = f"+{bonus} points (Total: 0.75)"
+                            else:
+                                # User is submitting screenshot without text feedback (only 0.5)
+                                bonus = 0.5
+                                embed_title = "✅ Screenshot Feedback Received!"
+                                trust_text = f"+{bonus} points"
+                                
+                                await self.db.users.update_one(
+                                    {"user_id": message.author.id},
+                                    {
+                                        "$set": {
+                                            "last_claim.feedback_given": True,
+                                            "last_claim.screenshot": True
+                                        }
+                                    }
+                                )
                             
                             await self.db.users.update_one(
                                 {"user_id": message.author.id},
                                 {
-                                    "$set": {
-                                        "last_claim.feedback_given": True,
-                                        "last_claim.screenshot": True
+                                    "$inc": {
+                                        "trust_score": bonus,
+                                        "statistics.feedback_streak": 0 if not last_claim.get("text_feedback_only") else 0
                                     }
                                 }
                             )
-                        
-                        await self.db.users.update_one(
-                            {"user_id": message.author.id},
-                            {
-                                "$inc": {
-                                    "trust_score": bonus,
-                                    "statistics.feedback_streak": 0 if not last_claim.get("text_feedback_only") else 0
-                                }
-                            }
-                        )
-                        
-                        embed = discord.Embed(
-                            title=embed_title,
-                            description=f"{message.author.mention} thank you for the screenshot!",
-                            color=discord.Color.green()
-                        )
-                        embed.add_field(name="Trust Score", value=trust_text, inline=True)
-                        embed.add_field(name="Cookie Type", value=cookie_type.title(), inline=True)
-                        
-                        await message.add_reaction("✅")
-                        await message.add_reaction("📸")
-                        
-                        # Public feedback channel message (Style 1 with embed)
-                        if last_claim.get("rating"):
-                            stars = "⭐" * last_claim["rating"]
-                            feedback_embed = discord.Embed(
-                                description=f"{message.author.mention} rated **{cookie_type}** cookie {stars} ({last_claim['rating']}/5)",
-                                color=discord.Color.green(),
-                                timestamp=datetime.now(timezone.utc)
-                            )
-                            if last_claim.get('feedback_text'):
-                                feedback_embed.add_field(name="Feedback", value=last_claim['feedback_text'], inline=False)
-                            await message.channel.send(embed=feedback_embed)
-                        else:
-                            feedback_embed = discord.Embed(
-                                description=f"{message.author.mention} submitted feedback for **{cookie_type}** cookie",
-                                color=discord.Color.green(),
-                                timestamp=datetime.now(timezone.utc)
-                            )
-                            await message.channel.send(embed=feedback_embed)
-                        
-                        # Log channel message (Style 1 text format)
-                        if last_claim.get("rating"):
-                            stars = "⭐" * last_claim["rating"]
-                            feedback_text = f" - {last_claim.get('feedback_text', '')}" if last_claim.get('feedback_text') else ""
                             
-                            await self.log_action(
-                                message.guild.id,
-                                f"📸 {message.author.mention} rated **{cookie_type}** cookie {stars}{feedback_text}",
-                                discord.Color.green()
+                            embed = discord.Embed(
+                                title=embed_title,
+                                description=f"{message.author.mention} thank you for the screenshot!",
+                                color=discord.Color.green()
                             )
-                        else:
-                            await self.log_action(
-                                message.guild.id,
-                                f"📸 {message.author.mention} submitted screenshot feedback for **{cookie_type}** cookie",
-                                discord.Color.green()
-                            )
+                            embed.add_field(name="Trust Score", value=trust_text, inline=True)
+                            embed.add_field(name="Cookie Type", value=cookie_type.title(), inline=True)
+                            
+                            await message.add_reaction("✅")
+                            await message.add_reaction("📸")
+                            
+                            # Public feedback channel message (Style 1 with embed)
+                            if last_claim.get("rating"):
+                                stars = "⭐" * last_claim["rating"]
+                                feedback_embed = discord.Embed(
+                                    description=f"{message.author.mention} rated **{cookie_type}** cookie {stars} ({last_claim['rating']}/5)",
+                                    color=discord.Color.green(),
+                                    timestamp=datetime.now(timezone.utc)
+                                )
+                                if last_claim.get('feedback_text'):
+                                    feedback_embed.add_field(name="Feedback", value=last_claim['feedback_text'], inline=False)
+                                await message.channel.send(embed=feedback_embed)
+                            else:
+                                feedback_embed = discord.Embed(
+                                    description=f"{message.author.mention} submitted feedback for **{cookie_type}** cookie",
+                                    color=discord.Color.green(),
+                                    timestamp=datetime.now(timezone.utc)
+                                )
+                                await message.channel.send(embed=feedback_embed)
+                            
+                            # Log channel message (Style 1 text format)
+                            if last_claim.get("rating"):
+                                stars = "⭐" * last_claim["rating"]
+                                feedback_text = f" - {last_claim.get('feedback_text', '')}" if last_claim.get('feedback_text') else ""
+                                
+                                await self.log_action(
+                                    message.guild.id,
+                                    f"📸 {message.author.mention} rated **{cookie_type}** cookie {stars}{feedback_text}",
+                                    discord.Color.green()
+                                )
+                            else:
+                                await self.log_action(
+                                    message.guild.id,
+                                    f"📸 {message.author.mention} submitted screenshot feedback for **{cookie_type}** cookie",
+                                    discord.Color.green()
+                                )
+            except discord.HTTPException:
+                # Handle failed message edits/sends
+                pass
+            except Exception as e:
+                print(f"Error processing feedback attachment: {e}")
 
 async def setup(bot):
     await bot.add_cog(FeedbackCog(bot))

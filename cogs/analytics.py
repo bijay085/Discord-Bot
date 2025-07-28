@@ -1,4 +1,6 @@
 # cogs/analytics.py
+# Location: cogs/analytics.py
+# Description: Analytics tracking with batch processing and performance optimization
 
 import discord
 from discord.ext import commands, tasks
@@ -13,10 +15,13 @@ class AnalyticsCog(commands.Cog):
         self.update_analytics.start()
         self.command_cache = defaultdict(int)
         self.user_cache = set()
+        self._command_batch = []
+        self._max_batch_size = 50
         
     async def cog_unload(self):
         self.update_analytics.cancel()
         await self.flush_cache()
+        await self.flush_command_batch()
         
     async def log_action(self, guild_id: int, message: str, color: discord.Color = discord.Color.blue()):
         cookie_cog = self.bot.get_cog("CookieCog")
@@ -28,25 +33,73 @@ class AnalyticsCog(commands.Cog):
         return user_id == config.get("owner_id")
     
     async def track_command(self, command_name: str, user_id: int, guild_id: int):
+        # Add to local cache for quick stats
         self.command_cache[command_name] += 1
         self.user_cache.add(user_id)
         
-        await self.db.analytics.update_one(
-            {"_id": "command_usage"},
-            {
-                "$inc": {
-                    f"commands.{command_name}.total": 1,
-                    f"commands.{command_name}.today": 1,
-                    f"commands.{command_name}.this_week": 1,
-                    f"commands.{command_name}.this_month": 1
-                },
-                "$addToSet": {
-                    f"commands.{command_name}.unique_users": user_id,
-                    f"commands.{command_name}.guilds": guild_id
-                }
-            },
-            upsert=True
-        )
+        # Batch database updates for better performance
+        self._command_batch.append({
+            "command": command_name,
+            "user_id": user_id,
+            "guild_id": guild_id,
+            "timestamp": datetime.now(timezone.utc)
+        })
+        
+        if len(self._command_batch) >= self._max_batch_size:
+            await self.flush_command_batch()
+    
+    async def flush_command_batch(self):
+        if not self._command_batch:
+            return
+            
+        try:
+            # Group by command for bulk updates
+            command_groups = defaultdict(list)
+            for item in self._command_batch:
+                command_groups[item["command"]].append(item)
+            
+            # Bulk update for each command
+            for command_name, items in command_groups.items():
+                user_ids = list(set(item["user_id"] for item in items))
+                guild_ids = list(set(item["guild_id"] for item in items))
+                count = len(items)
+                
+                await self.db.analytics.update_one(
+                    {"_id": "command_usage"},
+                    {
+                        "$inc": {
+                            f"commands.{command_name}.total": count,
+                            f"commands.{command_name}.today": count,
+                            f"commands.{command_name}.this_week": count,
+                            f"commands.{command_name}.this_month": count
+                        },
+                        "$addToSet": {
+                            f"commands.{command_name}.unique_users": {"$each": user_ids},
+                            f"commands.{command_name}.guilds": {"$each": guild_ids}
+                        }
+                    },
+                    upsert=True
+                )
+            
+            # Insert analytics entries
+            if self._command_batch:
+                await self.db.analytics.insert_many(
+                    [
+                        {
+                            "type": "command_usage",
+                            "command": item["command"],
+                            "user_id": item["user_id"],
+                            "guild_id": item["guild_id"],
+                            "timestamp": item["timestamp"]
+                        }
+                        for item in self._command_batch
+                    ]
+                )
+            
+            self._command_batch.clear()
+            
+        except Exception as e:
+            print(f"Error flushing command batch: {e}")
     
     async def track_cookie_extraction(self, cookie_type: str, user_id: int, file_name: str):
         await self.db.analytics.update_one(
@@ -115,6 +168,7 @@ class AnalyticsCog(commands.Cog):
     async def update_analytics(self):
         try:
             await self.flush_cache()
+            await self.flush_command_batch()
             
             analytics_data = await self.db.analytics.find_one({"_id": "bot_analytics"})
             if not analytics_data:
@@ -259,6 +313,10 @@ class AnalyticsCog(commands.Cog):
             return
         
         await ctx.defer()
+        
+        # Flush pending data before showing analytics
+        await self.flush_cache()
+        await self.flush_command_batch()
         
         analytics = await self.db.analytics.find_one({"_id": "bot_analytics"})
         active_users = await self.db.analytics.find_one({"_id": "active_users"})
@@ -537,7 +595,7 @@ class AnalyticsCog(commands.Cog):
         
         embed.add_field(
             name="📊 Total Activity",
-            value=f"**Commands:** {sum(c[1] for c in cmd_trends)}\n"
+            value=f"**Commands:** {sum(c[1] for c in cmd_trends) if 'cmd_trends' in locals() else 0}\n"
                   f"**Cookies:** {cookie_data.get(f'total_{period_key}', 0) if cookie_data else 0}",
             inline=False
         )

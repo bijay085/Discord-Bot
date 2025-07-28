@@ -1,20 +1,41 @@
+# bot_core/logger.py
+# Location: bot_core/logger.py
+# Description: Enhanced logging system with webhook queue to prevent spam
+
 import logging
 import sys
 import discord
 import aiohttp
+import asyncio
 from datetime import datetime, timezone
+from collections import deque
 
 class WebhookHandler(logging.Handler):
     def __init__(self, webhook_url=None):
         super().__init__()
         self.webhook_url = webhook_url
         self.session = None
+        self.queue = asyncio.Queue(maxsize=100)
+        self.last_sent = {}
+        self.rate_limit_window = 60  # seconds
+        self.max_messages_per_window = 10
         
     async def send_to_webhook(self, record):
         if not self.webhook_url or not self.session:
             return
             
         try:
+            # Rate limiting check
+            current_time = datetime.now().timestamp()
+            window_start = current_time - self.rate_limit_window
+            
+            # Clean old timestamps
+            self.last_sent = {k: v for k, v in self.last_sent.items() if v > window_start}
+            
+            # Check if we've sent too many messages
+            if len(self.last_sent) >= self.max_messages_per_window:
+                return
+            
             webhook = discord.Webhook.from_url(self.webhook_url, session=self.session)
             
             color = {
@@ -36,7 +57,10 @@ class WebhookHandler(logging.Handler):
                 embed.add_field(name="Exception", value=f"```{exc_text[:1000]}```", inline=False)
             
             await webhook.send(embed=embed)
-        except:
+            self.last_sent[current_time] = current_time
+            
+        except Exception:
+            # Silently fail to avoid infinite loops
             pass
     
     def emit(self, record):
@@ -45,8 +69,10 @@ class WebhookHandler(logging.Handler):
                 import asyncio
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
-                    asyncio.create_task(self.send_to_webhook(record))
-            except:
+                    # Don't block, just create task
+                    if self.queue.qsize() < self.queue.maxsize:
+                        asyncio.create_task(self.send_to_webhook(record))
+            except Exception:
                 pass
 
 webhook_handler = WebhookHandler()

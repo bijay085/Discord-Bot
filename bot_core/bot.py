@@ -1,3 +1,7 @@
+# bot_core/bot.py
+# Location: bot_core/bot.py
+# Description: Main bot class with connection pooling and cleanup fixes
+
 import discord
 from discord.ext import commands, tasks
 import motor.motor_asyncio
@@ -51,6 +55,7 @@ class CookieBot(commands.Bot):
         self.command_stats = {}
         self.error_webhooks = {}
         self.status_messages = {}
+        self.active_claims = {}
         self.db_handler = DatabaseHandler(self)
         self.event_handler = EventHandler(self)
         
@@ -87,6 +92,7 @@ class CookieBot(commands.Bot):
                 maxPoolSize=50,
                 minPoolSize=10,
                 maxIdleTimeMS=45000,
+                waitQueueTimeoutMS=10000,
                 serverSelectionTimeoutMS=5000,
                 connectTimeoutMS=10000,
                 retryWrites=True,
@@ -113,6 +119,7 @@ class CookieBot(commands.Bot):
         self.update_presence.start()
         self.cleanup_cache.start()
         self.monitor_performance.start()
+        self.cleanup_active_claims.start()
         
         print("✅ Setup complete!")
         
@@ -181,6 +188,25 @@ class CookieBot(commands.Bot):
             logger.error(f"Error in cleanup: {e}")
     
     @tasks.loop(minutes=10)
+    async def cleanup_active_claims(self):
+        try:
+            if not self.is_ready():
+                return
+                
+            for user_id in list(self.active_claims.keys()):
+                if not self.get_user(user_id):
+                    del self.active_claims[user_id]
+                    
+            cookie_cog = self.get_cog("CookieCog")
+            if cookie_cog and hasattr(cookie_cog, 'active_claims'):
+                for user_id in list(cookie_cog.active_claims.keys()):
+                    if not self.get_user(user_id):
+                        del cookie_cog.active_claims[user_id]
+                        
+        except Exception as e:
+            logger.error(f"Error cleaning up active claims: {e}")
+    
+    @tasks.loop(minutes=10)
     async def monitor_performance(self):
         try:
             if not self.is_ready():
@@ -218,6 +244,10 @@ class CookieBot(commands.Bot):
     
     @monitor_performance.before_loop
     async def before_monitor_performance(self):
+        await self.wait_until_ready()
+        
+    @cleanup_active_claims.before_loop
+    async def before_cleanup_active_claims(self):
         await self.wait_until_ready()
     
     async def on_ready(self):

@@ -1,3 +1,7 @@
+# cogs/points.py
+# Location: cogs/points.py
+# Description: Points system with fixed daily command timezone handling
+
 import discord
 from discord.ext import commands
 from discord import app_commands
@@ -66,20 +70,27 @@ class PointsCog(commands.Cog):
                 if daily_claimed.tzinfo is None:
                     daily_claimed = daily_claimed.replace(tzinfo=timezone.utc)
                 
-                time_passed = datetime.now(timezone.utc) - daily_claimed
-                if time_passed < timedelta(hours=24):
-                    remaining = timedelta(hours=24) - time_passed
+                # Fixed daily reset logic - check if it's a new day
+                now = datetime.now(timezone.utc)
+                last_claim_day = daily_claimed.replace(hour=0, minute=0, second=0, microsecond=0)
+                current_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+                
+                if current_day <= last_claim_day:
+                    # Calculate time until next daily (midnight UTC)
+                    tomorrow = current_day + timedelta(days=1)
+                    remaining = tomorrow - now
                     hours = int(remaining.total_seconds() // 3600)
                     minutes = int((remaining.total_seconds() % 3600) // 60)
                     
                     embed = discord.Embed(
                         title="⏰ Daily Already Claimed!",
-                        description=f"You need to wait before claiming again.",
+                        description=f"You need to wait until the next day to claim again.",
                         color=discord.Color.orange()
                     )
                     embed.add_field(name="Time Remaining", value=f"**{hours}h {minutes}m**", inline=True)
-                    embed.add_field(name="Next Claim", value=f"<t:{int((daily_claimed + timedelta(hours=24)).timestamp())}:R>", inline=True)
-                    embed.set_footer(text="Come back tomorrow!")
+                    embed.add_field(name="Next Claim", value=f"<t:{int(tomorrow.timestamp())}:R>", inline=True)
+                    embed.add_field(name="Last Claimed", value=f"<t:{int(daily_claimed.timestamp())}:R>", inline=True)
+                    embed.set_footer(text="Daily resets at midnight UTC!")
                     
                     await ctx.send(embed=embed, ephemeral=True)
                     return
@@ -108,7 +119,7 @@ class PointsCog(commands.Cog):
             )
             embed.add_field(name="Reward", value=f"**+{daily_points}** points", inline=True)
             embed.add_field(name="New Balance", value=f"**{new_points}** points", inline=True)
-            embed.add_field(name="Next Daily", value="Available in 24 hours", inline=True)
+            embed.add_field(name="Next Daily", value="Available tomorrow at midnight UTC", inline=True)
             embed.set_footer(text=f"Total earned: {user_data['total_earned'] + daily_points} points")
             
             await ctx.send(embed=embed, ephemeral=True)

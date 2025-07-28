@@ -1,3 +1,7 @@
+# cogs/cookie.py
+# Location: cogs/cookie.py
+# Description: Cookie distribution cog with fixed role caching and memory management
+
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands
@@ -20,8 +24,11 @@ class CookieView(discord.ui.View):
     async def on_timeout(self):
         for item in self.children:
             item.disabled = True
-        if self.response:
-            await self.response.edit(view=self)
+        try:
+            if self.response:
+                await self.response.edit(view=self)
+        except discord.NotFound:
+            pass
             
     async def interaction_check(self, interaction: discord.Interaction):
         if interaction.user.id != self.user_id:
@@ -240,7 +247,7 @@ class CookieCog(commands.Cog):
         keys_to_remove = []
         
         # Clear from cooldown cache
-        for key in self.cooldown_cache.keys():
+        for key in list(self.cooldown_cache.keys()):
             if key.startswith(f"{user_id}:"):
                 keys_to_remove.append(key)
         for key in keys_to_remove:
@@ -248,7 +255,7 @@ class CookieCog(commands.Cog):
         
         # Clear from role cache
         keys_to_remove = []
-        for key in self.role_cache.keys():
+        for key in list(self.role_cache.keys()):
             if key.startswith(f"{user_id}:"):
                 keys_to_remove.append(key)
         for key in keys_to_remove:
@@ -262,8 +269,11 @@ class CookieCog(commands.Cog):
         role_key = self.get_user_role_key(user)
         cache_key = f"{role_key}:{cookie_type}:cooldown"
         
+        # Check cache with expiration
         if not force_refresh and cache_key in self.cooldown_cache:
-            return self.cooldown_cache[cache_key]
+            cached_time, value = self.cooldown_cache[cache_key]
+            if datetime.now() - cached_time < timedelta(minutes=5):
+                return value
             
         if not server.get("role_based"):
             cooldown = server["cookies"][cookie_type]["cooldown"]
@@ -281,15 +291,19 @@ class CookieCog(commands.Cog):
             
             cooldown = min_cooldown
         
-        self.cooldown_cache[cache_key] = cooldown
+        # Store with timestamp
+        self.cooldown_cache[cache_key] = (datetime.now(), cooldown)
         return cooldown
     
     async def get_user_cost(self, user: discord.Member, server: dict, cookie_type: str, force_refresh: bool = False) -> int:
         role_key = self.get_user_role_key(user)
         cache_key = f"{role_key}:{cookie_type}:cost"
         
+        # Check cache with expiration
         if not force_refresh and cache_key in self.role_cache:
-            return self.role_cache[cache_key]
+            cached_time, value = self.role_cache[cache_key]
+            if datetime.now() - cached_time < timedelta(minutes=5):
+                return value
             
         if not server.get("role_based"):
             cost = server["cookies"][cookie_type]["cost"]
@@ -308,7 +322,8 @@ class CookieCog(commands.Cog):
             
             cost = min_cost
         
-        self.role_cache[cache_key] = cost
+        # Store with timestamp
+        self.role_cache[cache_key] = (datetime.now(), cost)
         return cost
     
     @tasks.loop(minutes=5)

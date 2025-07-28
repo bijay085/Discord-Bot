@@ -1,4 +1,6 @@
 # cogs/directory.py
+# Location: cogs/directory.py
+# Description: Directory management with stock caching optimization
 
 import discord
 from discord.ext import commands, tasks
@@ -10,7 +12,9 @@ class DirectoryCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.db = bot.db
+        self.stock_cache = {}
         self.check_directories.start()
+        self.update_stock_cache.start()
         
     async def log_action(self, guild_id: int, message: str, color: discord.Color = discord.Color.blue()):
         cookie_cog = self.bot.get_cog("CookieCog")
@@ -20,6 +24,19 @@ class DirectoryCog(commands.Cog):
     async def is_owner(self, user_id: int) -> bool:
         config = await self.db.config.find_one({"_id": "bot_config"})
         return user_id == config.get("owner_id")
+    
+    @tasks.loop(minutes=5)
+    async def update_stock_cache(self):
+        """Update stock cache every 5 minutes for better performance"""
+        try:
+            self.stock_cache = {}
+            async for server in self.db.servers.find({"enabled": True}):
+                for cookie_type, config in server.get("cookies", {}).items():
+                    directory = config.get("directory")
+                    if directory and os.path.exists(directory):
+                        self.stock_cache[directory] = len([f for f in os.listdir(directory) if f.endswith('.txt')])
+        except Exception as e:
+            print(f"Error updating stock cache: {e}")
     
     @tasks.loop(hours=1)
     async def check_directories(self):
@@ -44,9 +61,10 @@ class DirectoryCog(commands.Cog):
                         missing_dirs.append(f"{server['server_name']}: {cookie_type} - {directory}")
                         Path(directory).mkdir(parents=True, exist_ok=True)
                     else:
-                        files = [f for f in os.listdir(directory) if f.endswith('.txt')]
-                        if len(files) < 5:
-                            low_stock.append(f"{server['server_name']}: {cookie_type} - {len(files)} files")
+                        # Use cached stock if available
+                        files_count = self.stock_cache.get(directory, len([f for f in os.listdir(directory) if f.endswith('.txt')]))
+                        if files_count < 5:
+                            low_stock.append(f"{server['server_name']}: {cookie_type} - {files_count} files")
             
             if missing_dirs or low_stock:
                 main_log = config.get("main_log_channel")
@@ -77,6 +95,14 @@ class DirectoryCog(commands.Cog):
                         
         except Exception as e:
             print(f"Error in directory check: {e}")
+    
+    @update_stock_cache.before_loop
+    async def before_update_stock_cache(self):
+        await self.bot.wait_until_ready()
+    
+    @check_directories.before_loop
+    async def before_check_directories(self):
+        await self.bot.wait_until_ready()
     
     @commands.hybrid_command(name="checkdirs", description="Check all cookie directories (Owner only)")
     async def checkdirs(self, ctx):
@@ -110,15 +136,20 @@ class DirectoryCog(commands.Cog):
                     server_status.append(f"❌ {cookie_type}: Missing")
                     all_good = False
                 else:
-                    files = [f for f in os.listdir(directory) if f.endswith('.txt')]
-                    count = len(files)
-                    if count == 0:
+                    # Use cache if available, otherwise count files
+                    files_count = self.stock_cache.get(directory)
+                    if files_count is None:
+                        files = [f for f in os.listdir(directory) if f.endswith('.txt')]
+                        files_count = len(files)
+                        self.stock_cache[directory] = files_count
+                    
+                    if files_count == 0:
                         server_status.append(f"🔴 {cookie_type}: Empty")
                         all_good = False
-                    elif count < 5:
-                        server_status.append(f"🟡 {cookie_type}: Low ({count} files)")
+                    elif files_count < 5:
+                        server_status.append(f"🟡 {cookie_type}: Low ({files_count} files)")
                     else:
-                        server_status.append(f"🟢 {cookie_type}: OK ({count} files)")
+                        server_status.append(f"🟢 {cookie_type}: OK ({files_count} files)")
             
             if server_status and len(embed.fields) < 20:
                 embed.add_field(
@@ -170,6 +201,9 @@ class DirectoryCog(commands.Cog):
         
         await ctx.send(embed=embed)
         
+        # Update cache after creating directories
+        await self.update_stock_cache()
+        
         await self.log_action(
             ctx.guild.id,
             f"📁 {ctx.author.mention} created {created} missing directories",
@@ -212,6 +246,8 @@ class DirectoryCog(commands.Cog):
         else:
             files = len([f for f in os.listdir(directory) if f.endswith('.txt')])
             status = f"✅ Exists ({files} files)"
+            # Update cache
+            self.stock_cache[directory] = files
         
         embed = discord.Embed(
             title="📁 Directory Updated",
@@ -252,7 +288,8 @@ class DirectoryCog(commands.Cog):
         
         for directory in sorted(all_dirs)[:20]:
             exists = os.path.exists(directory)
-            files = len([f for f in os.listdir(directory) if f.endswith('.txt')]) if exists else 0
+            # Use cached stock count
+            files = self.stock_cache.get(directory, len([f for f in os.listdir(directory) if f.endswith('.txt')]) if exists else 0)
             
             value = f"{'✅' if exists else '❌'} Files: **{files}**\nUsed by: {', '.join(dir_info[directory][:3])}"
             if len(dir_info[directory]) > 3:
@@ -276,6 +313,9 @@ class DirectoryCog(commands.Cog):
             return
         
         await ctx.defer()
+        
+        # Force update cache before sync
+        await self.update_stock_cache()
         
         dir_to_servers = {}
         
@@ -306,9 +346,10 @@ class DirectoryCog(commands.Cog):
                     if len(servers) > 5:
                         server_list += f"\n• +{len(servers) - 5} more"
                     
+                    stock = self.stock_cache.get(directory, "Unknown")
                     embed.add_field(
                         name=f"Directory: `{directory[-40:]}`" if len(directory) > 40 else f"Directory: `{directory}`",
-                        value=server_list,
+                        value=f"{server_list}\n**Stock: {stock} files**",
                         inline=False
                     )
         

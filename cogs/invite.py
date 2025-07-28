@@ -1,3 +1,7 @@
+# cogs/invite.py
+# Location: cogs/invite.py
+# Description: Invite tracking system with improved cache handling
+
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands
@@ -131,6 +135,13 @@ class InviteCog(commands.Cog):
                 self.invites[guild.id] = await guild.invites()
             except Exception as e:
                 print(f"Failed to cache invites for {guild.name}: {e}")
+    
+    @commands.Cog.listener()
+    async def on_guild_join(self, guild):
+        try:
+            self.invites[guild.id] = await guild.invites()
+        except discord.Forbidden:
+            pass
     
     @commands.Cog.listener()
     async def on_invite_create(self, invite):

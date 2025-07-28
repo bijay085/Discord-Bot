@@ -1,3 +1,7 @@
+# bot_core/views.py
+# Location: bot_core/views.py
+# Description: Bot control views with improved timeout handling
+
 import discord
 from datetime import datetime, timezone
 import psutil
@@ -7,6 +11,16 @@ class BotControlView(discord.ui.View):
     def __init__(self, bot):
         super().__init__(timeout=None)
         self.bot = bot
+        self.response = None
+        
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+        try:
+            if self.response:
+                await self.response.edit(view=self)
+        except discord.NotFound:
+            pass
         
     @discord.ui.button(label="System Status", style=discord.ButtonStyle.primary, emoji="📊")
     async def system_status(self, interaction: discord.Interaction, button: discord.ui.Button):
