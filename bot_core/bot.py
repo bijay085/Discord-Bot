@@ -123,7 +123,8 @@ class CookieBot(commands.Bot):
             "cogs.admin",
             "cogs.invite",
             "cogs.directory",
-            "cogs.analytics"
+            "cogs.analytics",
+            "cogs.feedback"
         ]
         
         loaded = 0

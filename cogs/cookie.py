@@ -71,42 +71,6 @@ class CookieSelectMenu(discord.ui.Select):
         if cog:
             await cog.process_cookie_claim(interaction, cookie_type)
 
-class FeedbackModal(discord.ui.Modal):
-    def __init__(self, cookie_type):
-        super().__init__(title=f"Submit {cookie_type.title()} Cookie Feedback")
-        
-        self.rating = discord.ui.TextInput(
-            label="Rate this cookie (1-5 stars)",
-            placeholder="Enter a number from 1 to 5",
-            min_length=1,
-            max_length=1,
-            required=True
-        )
-        self.add_item(self.rating)
-        
-        self.feedback = discord.ui.TextInput(
-            label="Your feedback",
-            placeholder="How was the cookie? Did it work properly?",
-            style=discord.TextStyle.paragraph,
-            min_length=10,
-            max_length=500,
-            required=True
-        )
-        self.add_item(self.feedback)
-        
-    async def on_submit(self, interaction: discord.Interaction):
-        try:
-            rating = int(self.rating.value)
-            if rating < 1 or rating > 5:
-                await interaction.response.send_message("❌ Rating must be between 1-5!", ephemeral=True)
-                return
-                
-            cog = interaction.client.get_cog("CookieCog")
-            if cog:
-                await cog.process_feedback_submission(interaction, rating, self.feedback.value)
-        except ValueError:
-            await interaction.response.send_message("❌ Invalid rating! Enter a number 1-5", ephemeral=True)
-
 class CookieProgressEmbed:
     @staticmethod
     def create_claim_progress(step: int, total: int = 4):
@@ -134,7 +98,6 @@ class CookieCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.db = bot.db
-        self.check_feedback_deadlines.start()
         self.clear_role_cache.start()
         self.active_claims = {}
         self.cooldown_cache = {}
@@ -537,24 +500,46 @@ class CookieCog(commands.Cog):
                 success_embed.add_field(name="📊 New Balance", value=f"{user_data['points'] - cost} points", inline=True)
                 success_embed.add_field(name="⏰ Cooldown", value=f"{cooldown_hours} hours", inline=True)
                 success_embed.add_field(
-                    name="⏰ Feedback Deadline",
-                    value=f"<t:{int(feedback_deadline.timestamp())}:R>",
+                    name="📸 Feedback Required",
+                    value=f"**Post a screenshot in <#{server['channels']['feedback']}> within 15 minutes!**\nDeadline: <t:{int(feedback_deadline.timestamp())}:R>",
                     inline=False
                 )
                 
-                button = discord.ui.Button(
-                    label="Submit Feedback Now",
+                # Create the two buttons
+                button1 = discord.ui.Button(
+                    label="Quick Feedback (Optional)",
                     style=discord.ButtonStyle.success,
+                    emoji="⭐"
+                )
+                
+                button2 = discord.ui.Button(
+                    label="Post Feedback Photo (Required)",
+                    style=discord.ButtonStyle.primary,
                     emoji="📸"
                 )
                 
                 async def feedback_callback(interaction: discord.Interaction):
-                    modal = FeedbackModal(cookie_type)
-                    await interaction.response.send_modal(modal)
+                    feedback_cog = self.bot.get_cog("FeedbackCog")
+                    if feedback_cog:
+                        modal = feedback_cog.FeedbackModal(cookie_type)
+                        await interaction.response.send_modal(modal)
+                    else:
+                        await interaction.response.send_message("❌ Feedback system not available!", ephemeral=True)
                 
-                button.callback = feedback_callback
+                async def photo_callback(interaction: discord.Interaction):
+                    feedback_channel_id = server['channels']['feedback']
+                    await interaction.response.send_message(
+                        f"📸 Please post your screenshot in <#{feedback_channel_id}>\n"
+                        f"**Required within 15 minutes or you'll be blacklisted!**",
+                        ephemeral=True
+                    )
+                
+                button1.callback = feedback_callback
+                button2.callback = photo_callback
+                
                 view = discord.ui.View()
-                view.add_item(button)
+                view.add_item(button1)
+                view.add_item(button2)
                 
                 await progress_msg.edit(embed=success_embed, view=view)
                 
@@ -590,129 +575,6 @@ class CookieCog(commands.Cog):
                 color=discord.Color.red()
             )
             await interaction.followup.send(embed=error_embed, ephemeral=True)
-    
-    async def process_feedback_submission(self, interaction: discord.Interaction, rating: int, feedback: str):
-        try:
-            user_data = await self.db.users.find_one({"user_id": interaction.user.id})
-            if not user_data or not user_data.get("last_claim"):
-                await interaction.response.send_message("❌ No recent cookie claim found!", ephemeral=True)
-                return
-            
-            last_claim = user_data["last_claim"]
-            if last_claim.get("feedback_given"):
-                await interaction.response.send_message("✅ You already submitted feedback!", ephemeral=True)
-                return
-            
-            streak_bonus = 0
-            current_streak = user_data.get("statistics", {}).get("feedback_streak", 0)
-            
-            if rating == 5:
-                await self.db.users.update_one(
-                    {"user_id": interaction.user.id},
-                    {"$inc": {"statistics.perfect_ratings": 1}}
-                )
-                streak_bonus = 2
-            
-            await self.db.users.update_one(
-                {"user_id": interaction.user.id},
-                {
-                    "$set": {
-                        "last_claim.feedback_given": True,
-                        "last_claim.rating": rating,
-                        "last_claim.feedback_text": feedback
-                    },
-                    "$inc": {
-                        "trust_score": 2 + streak_bonus,
-                        "statistics.feedback_streak": 1
-                    }
-                }
-            )
-            
-            await self.db.feedback.insert_one({
-                "user_id": interaction.user.id,
-                "cookie_type": last_claim["type"],
-                "file": last_claim["file"],
-                "rating": rating,
-                "feedback": feedback,
-                "timestamp": datetime.now(timezone.utc),
-                "server_id": interaction.guild_id
-            })
-            
-            stars = "⭐" * rating
-            embed = discord.Embed(
-                title="✅ Feedback Submitted!",
-                description=f"Thank you for your feedback on the **{last_claim['type']}** cookie!",
-                color=discord.Color.green()
-            )
-            embed.add_field(name="Rating", value=stars, inline=True)
-            embed.add_field(name="Trust Score", value=f"+{2 + streak_bonus} points", inline=True)
-            embed.add_field(name="Streak", value=f"{current_streak + 1} feedback(s)", inline=True)
-            embed.add_field(name="Your Feedback", value=feedback[:100] + "..." if len(feedback) > 100 else feedback, inline=False)
-            
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-            
-            await self.log_action(
-                interaction.guild_id,
-                f"📸 {interaction.user.mention} rated **{last_claim['type']}** cookie {stars} ({rating}/5)",
-                discord.Color.green()
-            )
-            
-        except Exception as e:
-            print(f"Error in process_feedback_submission: {e}")
-            await interaction.response.send_message("❌ Error submitting feedback!", ephemeral=True)
-    
-    @tasks.loop(minutes=5)
-    async def check_feedback_deadlines(self):
-        try:
-            now = datetime.now(timezone.utc)
-            
-            async for user in self.db.users.find({
-                "last_claim": {"$exists": True},
-                "last_claim.feedback_given": False,
-                "blacklisted": False
-            }):
-                last_claim = user.get("last_claim")
-                if last_claim and last_claim.get("feedback_deadline"):
-                    deadline = last_claim["feedback_deadline"]
-                    if deadline.tzinfo is None:
-                        deadline = deadline.replace(tzinfo=timezone.utc)
-                    
-                    if now > deadline:
-                        await self.db.users.update_one(
-                            {"user_id": user["user_id"]},
-                            {
-                                "$set": {
-                                    "blacklisted": True,
-                                    "blacklist_expires": now + timedelta(days=30),
-                                    "statistics.feedback_streak": 0
-                                }
-                            }
-                        )
-                        
-                        guild_id = last_claim.get("server_id")
-                        if guild_id:
-                            await self.log_action(
-                                guild_id,
-                                f"🚫 <@{user['user_id']}> blacklisted for not providing feedback",
-                                discord.Color.red()
-                            )
-                            
-                            try:
-                                user_obj = self.bot.get_user(user["user_id"])
-                                if user_obj and user.get("preferences", {}).get("dm_notifications", True):
-                                    embed = discord.Embed(
-                                        title="🚫 You've been blacklisted!",
-                                        description="You failed to provide feedback within the deadline.",
-                                        color=discord.Color.red()
-                                    )
-                                    embed.add_field(name="Duration", value="30 days", inline=True)
-                                    embed.add_field(name="Expires", value=f"<t:{int((now + timedelta(days=30)).timestamp())}:R>", inline=True)
-                                    await user_obj.send(embed=embed)
-                            except:
-                                pass
-                                
-        except Exception as e:
-            print(f"Error in feedback check: {e}")
     
     @commands.hybrid_command(name="cookie", description="Claim a cookie with interactive menu")
     async def cookie(self, ctx):
@@ -930,123 +792,6 @@ class CookieCog(commands.Cog):
             print(f"Error in stock command: {e}")
             await ctx.send("❌ An error occurred!", ephemeral=True)
     
-    @commands.hybrid_command(name="feedback", description="Submit feedback with interactive form")
-    async def feedback(self, ctx):
-        try:
-            server = await self.db.servers.find_one({"server_id": ctx.guild.id})
-            if not server:
-                await ctx.send("❌ Server not configured!", ephemeral=True)
-                return
-            
-            feedback_channel = server["channels"].get("feedback")
-            if feedback_channel and ctx.channel.id != feedback_channel:
-                embed = discord.Embed(
-                    title="❌ Wrong Channel",
-                    description=f"Please use <#{feedback_channel}> for feedback!",
-                    color=discord.Color.red()
-                )
-                await ctx.send(embed=embed, ephemeral=True)
-                return
-            
-            user_data = await self.db.users.find_one({"user_id": ctx.author.id})
-            if not user_data or not user_data.get("last_claim"):
-                embed = discord.Embed(
-                    title="❌ No Recent Claims",
-                    description="You haven't claimed any cookies recently!",
-                    color=discord.Color.red()
-                )
-                await ctx.send(embed=embed, ephemeral=True)
-                return
-            
-            last_claim = user_data["last_claim"]
-            if last_claim.get("feedback_given"):
-                embed = discord.Embed(
-                    title="✅ Already Submitted",
-                    description="You've already submitted feedback for your last cookie!",
-                    color=discord.Color.green()
-                )
-                await ctx.send(embed=embed, ephemeral=True)
-                return
-            
-            deadline = last_claim["feedback_deadline"]
-            if deadline.tzinfo is None:
-                deadline = deadline.replace(tzinfo=timezone.utc)
-            
-            if datetime.now(timezone.utc) > deadline:
-                embed = discord.Embed(
-                    title="❌ Deadline Expired",
-                    description="The feedback deadline has passed. You may be blacklisted.",
-                    color=discord.Color.red()
-                )
-                await ctx.send(embed=embed, ephemeral=True)
-                return
-            
-            modal = FeedbackModal(last_claim["type"])
-            
-            if hasattr(ctx, 'interaction') and ctx.interaction:
-                await ctx.interaction.response.send_modal(modal)
-            else:
-                embed = discord.Embed(
-                    title="📸 Submit Feedback",
-                    description=f"Click the button below to submit feedback for your **{last_claim['type']}** cookie!",
-                    color=discord.Color.blue()
-                )
-                embed.add_field(
-                    name="⏰ Deadline",
-                    value=f"<t:{int(deadline.timestamp())}:R>",
-                    inline=False
-                )
-                
-                button = discord.ui.Button(
-                    label="Submit Feedback",
-                    style=discord.ButtonStyle.success,
-                    emoji="📸"
-                )
-                
-                async def button_callback(interaction: discord.Interaction):
-                    if interaction.user.id != ctx.author.id:
-                        await interaction.response.send_message("This isn't for you!", ephemeral=True)
-                        return
-                    await interaction.response.send_modal(modal)
-                
-                button.callback = button_callback
-                view = discord.ui.View()
-                view.add_item(button)
-                
-                await ctx.send(embed=embed, view=view, ephemeral=True)
-                
-        except Exception as e:
-            print(f"Error in feedback command: {e}")
-            await ctx.send("❌ An error occurred!", ephemeral=True)
-    
-    @commands.Cog.listener()
-    async def on_member_update(self, before, after):
-        if before.roles != after.roles:
-            # Clear all caches for this user when their roles change
-            self.clear_user_cache(after.id)
-            
-            # Log role changes for debugging
-            added_roles = set(after.roles) - set(before.roles)
-            removed_roles = set(before.roles) - set(after.roles)
-            
-            if added_roles or removed_roles:
-                server = await self.db.servers.find_one({"server_id": after.guild.id})
-                if server:
-                    for role in added_roles:
-                        if str(role.id) in server.get("roles", {}):
-                            await self.log_action(
-                                after.guild.id,
-                                f"🎭 {after.mention} received role {role.mention} with cookie benefits",
-                                discord.Color.green()
-                            )
-                    for role in removed_roles:
-                        if str(role.id) in server.get("roles", {}):
-                            await self.log_action(
-                                after.guild.id,
-                                f"🎭 {after.mention} lost role {role.mention} with cookie benefits",
-                                discord.Color.orange()
-                            )
-    
     @commands.hybrid_command(name="refresh", description="Refresh your role benefits")
     async def refresh(self, ctx):
         """Force refresh role benefits for a user"""
@@ -1092,51 +837,34 @@ class CookieCog(commands.Cog):
             
         except Exception as e:
             await ctx.send("❌ Error refreshing benefits!", ephemeral=True)
-        if message.author.bot:
-            return
+    
+    @commands.Cog.listener()
+    async def on_member_update(self, before, after):
+        if before.roles != after.roles:
+            # Clear all caches for this user when their roles change
+            self.clear_user_cache(after.id)
             
-        if message.attachments and message.channel.type == discord.ChannelType.text:
-            server = await self.db.servers.find_one({"server_id": message.guild.id})
-            if server and message.channel.id == server["channels"].get("feedback"):
-                user_data = await self.db.users.find_one({"user_id": message.author.id})
-                if user_data and user_data.get("last_claim") and not user_data["last_claim"].get("feedback_given"):
-                    
-                    image_extensions = ['.png', '.jpg', '.jpeg', '.gif', '.webp']
-                    has_image = any(att.filename.lower().endswith(ext) for att in message.attachments for ext in image_extensions)
-                    
-                    if has_image:
-                        bonus = 3
-                        await self.db.users.update_one(
-                            {"user_id": message.author.id},
-                            {
-                                "$set": {
-                                    "last_claim.feedback_given": True,
-                                    "last_claim.screenshot": True
-                                },
-                                "$inc": {
-                                    "trust_score": bonus,
-                                    "statistics.feedback_streak": 1
-                                }
-                            }
-                        )
-                        
-                        embed = discord.Embed(
-                            title="✅ Screenshot Feedback Received!",
-                            description=f"{message.author.mention} thank you for the screenshot!",
-                            color=discord.Color.green()
-                        )
-                        embed.add_field(name="Trust Score", value=f"+{bonus} points", inline=True)
-                        embed.add_field(name="Cookie Type", value=user_data["last_claim"]["type"].title(), inline=True)
-                        
-                        await message.add_reaction("✅")
-                        await message.add_reaction("📸")
-                        await message.channel.send(embed=embed, delete_after=15)
-                        
-                        await self.log_action(
-                            message.guild.id,
-                            f"📸 {message.author.mention} submitted screenshot feedback for **{user_data['last_claim']['type']}** cookie",
-                            discord.Color.green()
-                        )
+            # Log role changes for debugging
+            added_roles = set(after.roles) - set(before.roles)
+            removed_roles = set(before.roles) - set(after.roles)
+            
+            if added_roles or removed_roles:
+                server = await self.db.servers.find_one({"server_id": after.guild.id})
+                if server:
+                    for role in added_roles:
+                        if str(role.id) in server.get("roles", {}):
+                            await self.log_action(
+                                after.guild.id,
+                                f"🎭 {after.mention} received role {role.mention} with cookie benefits",
+                                discord.Color.green()
+                            )
+                    for role in removed_roles:
+                        if str(role.id) in server.get("roles", {}):
+                            await self.log_action(
+                                after.guild.id,
+                                f"🎭 {after.mention} lost role {role.mention} with cookie benefits",
+                                discord.Color.orange()
+                            )
 
 async def setup(bot):
     await bot.add_cog(CookieCog(bot))
