@@ -293,8 +293,7 @@ class CookieBot(commands.Bot):
             "cogs.admin",
             "cogs.invite",
             "cogs.directory",
-            "cogs.analytics",
-            "cogs.events"
+            "cogs.analytics"
         ]
         
         loaded = 0
