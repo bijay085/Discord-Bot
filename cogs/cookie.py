@@ -585,6 +585,11 @@ class CookieCog(commands.Cog):
     @commands.hybrid_command(name="cookie", description="Claim a cookie with interactive menu")
     async def cookie(self, ctx):
         try:
+            # Handle interaction timeout - defer immediately for slash commands
+            if hasattr(ctx, 'interaction') and ctx.interaction:
+                if not ctx.interaction.response.is_done():
+                    await ctx.defer(ephemeral=True)
+            
             if not await self.check_maintenance(ctx):
                 return
             
@@ -667,7 +672,11 @@ class CookieCog(commands.Cog):
             select_menu = CookieSelectMenu(server, user_data, ctx.author, costs_dict)
             view.add_item(select_menu)
             
-            response = await ctx.send(embed=embed, view=view, ephemeral=True)
+            # Send appropriately based on whether interaction was deferred
+            if hasattr(ctx, 'interaction') and ctx.interaction and ctx.interaction.response.is_done():
+                response = await ctx.followup.send(embed=embed, view=view, ephemeral=True)
+            else:
+                response = await ctx.send(embed=embed, view=view, ephemeral=True)
             view.response = response
             
         except Exception as e:

@@ -5,7 +5,6 @@ import sys
 from pathlib import Path
 import importlib.util
 import traceback
-from datetime import datetime, timezone
 
 class EntertainmentHandler(commands.Cog):
     def __init__(self, bot):
@@ -14,243 +13,96 @@ class EntertainmentHandler(commands.Cog):
         self.failed_modules = []
         
     async def cog_load(self):
-        print("\n🎮 Loading Entertainment Modules...")
-        print("=" * 50)
-        
-        current_file = Path(__file__).resolve()
-        cogs_dir = current_file.parent
-        root_dir = cogs_dir.parent
-        entertainment_dir = root_dir / "entertainment"
-        
-        print(f"📍 Current file: {current_file}")
-        print(f"📁 Root directory: {root_dir}")
-        print(f"🎮 Looking for entertainment at: {entertainment_dir}")
+        entertainment_dir = Path(__file__).parent.parent / "entertainment"
         
         if not entertainment_dir.exists():
-            print(f"❌ Entertainment directory not found!")
-            print(f"   Expected location: {entertainment_dir}")
+            print("❌ Entertainment directory not found!")
             return
-            
-        print(f"✅ Entertainment directory found: {entertainment_dir}")
         
-        if str(entertainment_dir.parent) not in sys.path:
-            sys.path.insert(0, str(entertainment_dir.parent))
+        sys.path.insert(0, str(entertainment_dir.parent))
         
         python_files = [f for f in entertainment_dir.iterdir() 
                        if f.suffix == '.py' and f.name != '__init__.py']
         
         if not python_files:
-            print("❌ No Python files found in entertainment directory!")
-            print(f"   Directory contents: {list(entertainment_dir.iterdir())}")
+            print("❌ No modules found!")
             return
-            
-        print(f"📋 Found {len(python_files)} module(s) to load:")
-        for f in python_files:
-            print(f"   - {f.name}")
         
         for file_path in sorted(python_files):
             module_name = file_path.stem
-            print(f"\n🔄 Loading: {module_name}")
             
             try:
-                full_module_name = f'entertainment.{module_name}'
-                if full_module_name in sys.modules:
-                    del sys.modules[full_module_name]
-                
                 spec = importlib.util.spec_from_file_location(
-                    full_module_name,
+                    f'entertainment.{module_name}',
                     file_path
                 )
                 
                 if spec and spec.loader:
                     module = importlib.util.module_from_spec(spec)
-                    sys.modules[full_module_name] = module
                     spec.loader.exec_module(module)
                     
                     if hasattr(module, 'setup'):
                         await module.setup(self.bot)
                         self.loaded_modules.append(module_name)
-                        print(f"  ✅ Successfully loaded: {module_name}")
-                    else:
-                        print(f"  ⚠️ No setup function in: {module_name}")
-                        self.failed_modules.append((module_name, "No setup function"))
-                else:
-                    print(f"  ❌ Could not create module spec for: {module_name}")
-                    self.failed_modules.append((module_name, "Failed to create spec"))
+                        print(f"✅ Loaded entertainment module: {module_name}")
                     
             except Exception as e:
-                error_msg = f"{type(e).__name__}: {str(e)}"
-                print(f"  ❌ Failed to load {module_name}: {error_msg}")
-                print(f"  📋 Traceback:")
-                traceback.print_exc()
-                self.failed_modules.append((module_name, error_msg))
-        
-        print("\n" + "=" * 50)
-        print("📊 Entertainment Module Summary:")
-        print(f"  ✅ Loaded: {len(self.loaded_modules)} module(s)")
-        if self.loaded_modules:
-            print(f"     {', '.join(self.loaded_modules)}")
-        print(f"  ❌ Failed: {len(self.failed_modules)} module(s)")
-        if self.failed_modules:
-            for name, reason in self.failed_modules:
-                print(f"     {name}: {reason}")
-        print("=" * 50 + "\n")
-        
-        # Force sync commands after loading
-        if self.loaded_modules:
-            await self.force_sync_commands()
+                print(f"❌ Failed to load {module_name}: {str(e)[:50]}")
+                self.failed_modules.append(module_name)
     
-    async def force_sync_commands(self):
-        """Force sync all commands to Discord"""
-        try:
-            print("\n🔄 Force syncing commands...")
-            synced = await self.bot.tree.sync()
-            print(f"✅ Successfully synced {len(synced)} commands")
-            
-            # List all synced commands
-            print("📋 Synced commands:")
-            for cmd in synced:
-                print(f"   - /{cmd.name}")
-                
-        except Exception as e:
-            print(f"❌ Failed to sync commands: {e}")
-    
-    @commands.command(name="entertainment", aliases=["ent", "games"])
+    @commands.command(name="entertainment", aliases=["ent"])
     @commands.is_owner()
     async def entertainment_status(self, ctx):
         embed = discord.Embed(
-            title="🎮 Entertainment Module Status",
-            color=discord.Color.blue(),
-            timestamp=datetime.now(timezone.utc)
+            title="🎮 Entertainment Status",
+            color=discord.Color.blue()
         )
         
         if self.loaded_modules:
             embed.add_field(
-                name=f"✅ Loaded Modules ({len(self.loaded_modules)})",
-                value="\n".join([f"• {mod}" for mod in self.loaded_modules]),
+                name=f"✅ Loaded ({len(self.loaded_modules)})",
+                value=", ".join(self.loaded_modules),
                 inline=False
             )
         
         if self.failed_modules:
             embed.add_field(
-                name=f"❌ Failed Modules ({len(self.failed_modules)})",
-                value="\n".join([f"• {name}: {reason[:50]}..." if len(reason) > 50 else f"• {name}: {reason}" 
-                                for name, reason in self.failed_modules]),
+                name=f"❌ Failed ({len(self.failed_modules)})",
+                value=", ".join(self.failed_modules),
                 inline=False
             )
         
-        if not self.loaded_modules and not self.failed_modules:
-            embed.add_field(
-                name="📦 No Modules",
-                value="No entertainment modules found or loaded.",
-                inline=False
-            )
-        
-        cogs_list = []
-        for cog_name, cog in self.bot.cogs.items():
-            if any(mod.lower() in cog_name.lower() for mod in self.loaded_modules):
-                cogs_list.append(cog_name)
-        
-        if cogs_list:
-            embed.add_field(
-                name="🎯 Active Entertainment Cogs",
-                value="\n".join([f"• {cog}" for cog in cogs_list]),
-                inline=False
-            )
-        
-        root_dir = Path(__file__).resolve().parent.parent
-        entertainment_dir = root_dir / "entertainment"
-        
-        embed.add_field(
-            name="📁 Directory Info",
-            value=f"Location: `{entertainment_dir}`\nExists: {'✅' if entertainment_dir.exists() else '❌'}",
-            inline=False
-        )
-        
-        # Show available slash commands
-        slash_commands = []
-        for cmd in self.bot.tree.get_commands():
-            if cmd.name == "bet":
-                slash_commands.append(f"✅ /{cmd.name} - {cmd.description}")
-        
-        if slash_commands:
-            embed.add_field(
-                name="🎯 Available Slash Commands",
-                value="\n".join(slash_commands),
-                inline=False
-            )
-        else:
-            embed.add_field(
-                name="⚠️ No Entertainment Commands",
-                value="No entertainment slash commands found. Try `/sync` or restart the bot.",
-                inline=False
-            )
-        
-        embed.set_footer(text="Use /bet to try the betting game!")
+
         
         await ctx.send(embed=embed)
     
-    @commands.command(name="reload_entertainment", aliases=["reload_ent"])
+    @commands.command(name="reload_ent")
     @commands.is_owner()
     async def reload_entertainment(self, ctx):
-        await ctx.send("🔄 Reloading entertainment modules...")
+        msg = await ctx.send("🔄 Reloading...")
         
         for module_name in self.loaded_modules[:]:
-            try:
-                for name, cog in list(self.bot.cogs.items()):
-                    if module_name.lower() in name.lower():
-                        await self.bot.remove_cog(name)
-                        break
-            except:
-                pass
+            for name, cog in list(self.bot.cogs.items()):
+                if module_name.lower() in name.lower():
+                    await self.bot.remove_cog(name)
+                    break
         
         self.loaded_modules.clear()
         self.failed_modules.clear()
         
         await self.cog_load()
         
-        embed = discord.Embed(
-            title="✅ Reload Complete",
-            description=f"Loaded: {len(self.loaded_modules)} modules\nFailed: {len(self.failed_modules)} modules",
-            color=discord.Color.green()
-        )
-        
-        if self.loaded_modules:
-            embed.add_field(
-                name="Loaded",
-                value=", ".join(self.loaded_modules),
-                inline=False
-            )
-            
-        await ctx.send(embed=embed)
+        await msg.edit(content=f"✅ Reloaded: {len(self.loaded_modules)} modules")
     
     @commands.command(name="sync")
     @commands.is_owner()
     async def sync_commands(self, ctx):
-        """Manually sync slash commands"""
-        await ctx.send("🔄 Syncing commands...")
+        msg = await ctx.send("🔄 Syncing...")
         try:
             synced = await self.bot.tree.sync()
-            embed = discord.Embed(
-                title="✅ Commands Synced",
-                description=f"Successfully synced {len(synced)} commands",
-                color=discord.Color.green()
-            )
-            
-            cmd_list = []
-            for cmd in synced:
-                cmd_list.append(f"• /{cmd.name}")
-            
-            if cmd_list:
-                embed.add_field(
-                    name="📋 Available Commands",
-                    value="\n".join(cmd_list[:10]),
-                    inline=False
-                )
-                
-            await ctx.send(embed=embed)
+            await msg.edit(content=f"✅ Synced {len(synced)} commands")
         except Exception as e:
-            await ctx.send(f"❌ Failed to sync: {e}")
+            await msg.edit(content=f"❌ Failed: {str(e)[:100]}")
 
 async def setup(bot):
     await bot.add_cog(EntertainmentHandler(bot))

@@ -29,11 +29,7 @@ class BetAmountModal(discord.ui.Modal):
                 await interaction.response.send_message("❌ Amount must be positive!", ephemeral=True)
                 return
                 
-            success = await self.bet_game.add_player(interaction.user, amount)
-            if not success:
-                await interaction.response.send_message("❌ Failed to join! Check your balance.", ephemeral=True)
-            else:
-                await interaction.response.send_message(f"✅ Joined with {amount} {self.bet_game.currency}!", ephemeral=True)
+            await self.bet_game.add_player_from_interaction(interaction, amount)
                 
         except ValueError:
             await interaction.response.send_message("❌ Invalid amount!", ephemeral=True)
@@ -91,12 +87,16 @@ class BetView(discord.ui.View):
                 await interaction.response.send_message("❌ This is a solo bet! Start your own with `/bet solo`", ephemeral=True)
                 return
             
-            success = await self.bet_game.add_player(interaction.user, self.bet_game.players[self.bet_game.host_id]["bet"])
-            if success:
-                await interaction.response.send_message("✅ Solo bet started!", ephemeral=True)
-            else:
-                await interaction.response.send_message("❌ Failed to start!", ephemeral=True)
+            if self.bet_game.phase != "joining":
+                await interaction.response.send_message("❌ This bet has already started!", ephemeral=True)
+                return
+                
+            await self.bet_game.start_solo_game(interaction)
         else:
+            if interaction.user.id in self.bet_game.players:
+                await interaction.response.send_message("❌ You're already in this bet!", ephemeral=True)
+                return
+                
             modal = BetAmountModal(self.bet_game, interaction.user.id)
             await interaction.response.send_modal(modal)
     
@@ -128,8 +128,9 @@ class BetView(discord.ui.View):
             await interaction.response.send_message("❌ Only the host can cancel!", ephemeral=True)
             return
         
+        await interaction.response.defer()
         await self.bet_game.cancel_game()
-        await interaction.response.send_message("✅ Bet cancelled and refunded!", ephemeral=True)
+        await interaction.followup.send("✅ Bet cancelled and refunded!", ephemeral=True)
 
 class TimerManageView(discord.ui.View):
     def __init__(self, bet_game):
@@ -176,12 +177,94 @@ class BetGame:
         self.max_players = 50
         self.timer_end = datetime.now(timezone.utc) + timedelta(seconds=60)
         self.guess_timer_end = None
+        self.timer_task = None
         
         self.winning_number = None
         self.max_number = 10 if mode == "solo" else 10
         
         if mode == "solo" and initial_bet:
-            self.players[host.id] = {"user": host, "bet": initial_bet}
+            self.initial_bet = initial_bet
+    
+    async def start_solo_game(self, interaction: discord.Interaction):
+        if self.phase != "joining":
+            return
+            
+        user_data = await self.cog.get_user_data(interaction.user.id)
+        amount = self.initial_bet
+        
+        if self.currency == "points":
+            if user_data["points"] < amount:
+                await interaction.response.send_message(f"❌ You need {amount} points!", ephemeral=True)
+                return
+            await self.cog.db.users.update_one(
+                {"user_id": interaction.user.id},
+                {"$inc": {"points": -amount}}
+            )
+        else:
+            if user_data.get("trust_score", 50) < amount:
+                await interaction.response.send_message(f"❌ You need {amount} trust!", ephemeral=True)
+                return
+            current_trust = user_data.get("trust_score", 50)
+            await self.cog.db.users.update_one(
+                {"user_id": interaction.user.id},
+                {"$set": {"trust_score": current_trust - amount}}
+            )
+        
+        self.players[interaction.user.id] = {"user": interaction.user, "bet": amount}
+        
+        await interaction.response.send_message("✅ Solo bet started! Make your guess!", ephemeral=True)
+        
+        self.phase = "guessing"
+        self.winning_number = random.randint(1, 10)
+        self.guess_timer_end = datetime.now(timezone.utc) + timedelta(seconds=30)
+        
+        self.view.update_buttons()
+        await self.update_embed()
+        
+        self.cog.bot.loop.create_task(self.run_guess_timer())
+    
+    async def add_player_from_interaction(self, interaction: discord.Interaction, amount: int):
+        if self.phase != "joining":
+            await interaction.response.send_message("❌ This bet is no longer accepting players!", ephemeral=True)
+            return
+            
+        if len(self.players) >= self.max_players:
+            await interaction.response.send_message("❌ This bet is full!", ephemeral=True)
+            return
+        
+        user_data = await self.cog.get_user_data(interaction.user.id)
+        
+        if self.currency == "points":
+            if user_data["points"] < amount:
+                await interaction.response.send_message(f"❌ You need {amount} points! You have: {user_data['points']}", ephemeral=True)
+                return
+        else:
+            if user_data.get("trust_score", 50) < amount:
+                await interaction.response.send_message(f"❌ You need {amount} trust! You have: {user_data.get('trust_score', 50)}", ephemeral=True)
+                return
+        
+        if self.currency == "points":
+            await self.cog.db.users.update_one(
+                {"user_id": interaction.user.id},
+                {"$inc": {"points": -amount}}
+            )
+        else:
+            current_trust = user_data.get("trust_score", 50)
+            await self.cog.db.users.update_one(
+                {"user_id": interaction.user.id},
+                {"$set": {"trust_score": current_trust - amount}}
+            )
+        
+        self.players[interaction.user.id] = {"user": interaction.user, "bet": amount}
+        
+        if self.mode == "group":
+            self.max_number = 10 + (len(self.players) * 2)
+        
+        await interaction.response.send_message(f"✅ Joined with {amount} {self.currency}!", ephemeral=True)
+        await self.update_embed()
+        
+        if len(self.players) >= self.max_players:
+            await self.start_guessing_phase()
     
     async def add_player(self, user, amount: int) -> bool:
         if self.phase != "joining":
@@ -234,6 +317,8 @@ class BetGame:
         
         self.guesses[user_id] = guess
         
+        await self.update_embed()
+        
         if len(self.guesses) == len(self.players):
             await self.end_game()
         
@@ -251,6 +336,12 @@ class BetGame:
         
         await self.update_embed()
         
+        if self.timer_task:
+            self.timer_task.cancel()
+        
+        self.cog.bot.loop.create_task(self.run_guess_timer())
+    
+    async def run_guess_timer(self):
         await asyncio.sleep(30)
         if self.phase == "guessing":
             await self.end_game()
@@ -260,6 +351,9 @@ class BetGame:
             return
             
         self.phase = "ended"
+        
+        if self.timer_task:
+            self.timer_task.cancel()
         
         winner = None
         closest_diff = float('inf')
@@ -278,6 +372,7 @@ class BetGame:
         
         embed.add_field(name="🎯 Winning Number", value=str(self.winning_number), inline=True)
         embed.add_field(name="💰 Currency", value=self.currency.title(), inline=True)
+        embed.add_field(name="👥 Players", value=str(len(self.players)), inline=True)
         
         if winner and closest_diff == 0:
             winner_data = self.players[winner]
@@ -287,7 +382,7 @@ class BetGame:
             if self.currency == "points":
                 await self.cog.db.users.update_one(
                     {"user_id": winner},
-                    {"$inc": {"points": total_win}}
+                    {"$inc": {"points": int(total_win)}}
                 )
             else:
                 user_data = await self.cog.get_user_data(winner)
@@ -312,7 +407,7 @@ class BetGame:
         
         elif winner and self.mode == "group":
             winner_data = self.players[winner]
-            consolation = winner_data["bet"] * 0.5
+            consolation = int(winner_data["bet"] * 0.5)
             
             if self.currency == "points":
                 await self.cog.db.users.update_one(
@@ -330,13 +425,13 @@ class BetGame:
             embed.add_field(
                 name="🥈 Closest Guess",
                 value=f"{winner_data['user'].mention} (guessed {self.guesses.get(winner, 'N/A')})\n"
-                      f"Consolation: {int(consolation)} {self.currency} (50% back)",
+                      f"Consolation: {consolation} {self.currency} (50% back)",
                 inline=False
             )
         
         elif winner and self.mode == "solo" and closest_diff <= 2:
             player_data = self.players[self.host_id]
-            consolation = player_data["bet"] * 0.15
+            consolation = int(player_data["bet"] * 0.15)
             
             if self.currency == "points":
                 await self.cog.db.users.update_one(
@@ -354,7 +449,13 @@ class BetGame:
             embed.add_field(
                 name="😅 Close Guess!",
                 value=f"You guessed {self.guesses.get(self.host_id, 'N/A')}\n"
-                      f"Consolation: {int(consolation)} {self.currency} (15% back)",
+                      f"Consolation: {consolation} {self.currency} (15% back)",
+                inline=False
+            )
+        else:
+            embed.add_field(
+                name="😢 No Winners",
+                value="Nobody guessed correctly or submitted a guess!",
                 inline=False
             )
         
@@ -375,12 +476,18 @@ class BetGame:
             item.disabled = True
         
         await self.message.edit(embed=embed, view=self.view)
+        
+        if self.channel.id in self.cog.active_games:
+            del self.cog.active_games[self.channel.id]
     
     async def cancel_game(self):
         if self.phase == "ended":
             return
             
         self.phase = "ended"
+        
+        if self.timer_task:
+            self.timer_task.cancel()
         
         for user_id, player_data in self.players.items():
             if self.currency == "points":
@@ -406,6 +513,9 @@ class BetGame:
             item.disabled = True
         
         await self.message.edit(embed=embed, view=self.view)
+        
+        if self.channel.id in self.cog.active_games:
+            del self.cog.active_games[self.channel.id]
     
     async def update_embed(self):
         if not self.message:
@@ -453,6 +563,9 @@ class BetGame:
             if self.guess_timer_end:
                 time_left = max(0, (self.guess_timer_end - datetime.now(timezone.utc)).total_seconds())
                 embed.add_field(name="⏰ Time Left", value=f"{int(time_left)}s", inline=True)
+            
+            total_pool = sum(p["bet"] for p in self.players.values())
+            embed.add_field(name="💰 Pool", value=str(total_pool), inline=True)
         
         try:
             await self.message.edit(embed=embed, view=self.view)
@@ -465,13 +578,9 @@ class BetCog(commands.Cog):
         self.db = bot.db
         self.active_games = {}
         self.cleanup_games.start()
-        
+    
     async def cog_load(self):
-        try:
-            synced = await self.bot.tree.sync()
-            print(f"✅ BetCog: Synced {len(synced)} commands")
-        except Exception as e:
-            print(f"❌ BetCog: Failed to sync commands: {e}")
+        print("🎮 BetCog loaded")
     
     async def get_user_data(self, user_id: int):
         user = await self.db.users.find_one({"user_id": user_id})
@@ -564,6 +673,8 @@ class BetCog(commands.Cog):
             embed.add_field(name="⏰ Timer", value="60s", inline=True)
             embed.add_field(name="💰 Profit", value="50% on win", inline=True)
         
+        embed.set_footer(text="Click buttons below to interact!")
+        
         view = BetView(game)
         game.view = view
         
@@ -573,26 +684,15 @@ class BetCog(commands.Cog):
         self.active_games[ctx.channel.id] = game
         
         if mode == "group":
-            await asyncio.sleep(60)
-            if game.phase == "joining" and len(game.players) > 0:
+            game.timer_task = self.bot.loop.create_task(self._run_join_timer(game))
+    
+    async def _run_join_timer(self, game):
+        await asyncio.sleep(60)
+        if game.phase == "joining":
+            if len(game.players) > 0:
                 await game.start_guessing_phase()
-            elif game.phase == "joining":
+            else:
                 await game.cancel_game()
-                del self.active_games[ctx.channel.id]
-        else:
-            game.phase = "guessing"
-            game.winning_number = random.randint(1, 10)
-            game.guess_timer_end = datetime.now(timezone.utc) + timedelta(seconds=30)
-            await game.update_embed()
-
-    @bet.error
-    async def bet_error(self, ctx, error):
-        if isinstance(error, commands.MissingRequiredArgument):
-            await ctx.send("❌ Missing required argument! Please provide all parameters.", ephemeral=True)
-        elif isinstance(error, commands.BadArgument):
-            await ctx.send("❌ Invalid argument! Please check your inputs.", ephemeral=True)
-        else:
-            await ctx.send(f"❌ An error occurred: {str(error)}", ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(BetCog(bot))
