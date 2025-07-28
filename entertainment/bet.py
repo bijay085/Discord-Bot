@@ -579,3 +579,21 @@ class BetCog(commands.Cog):
             elif game.phase == "joining":
                 await game.cancel_game()
                 del self.active_games[ctx.channel.id]
+        else:
+            game.phase = "guessing"
+            game.winning_number = random.randint(1, 10)
+            game.guess_timer_end = datetime.now(timezone.utc) + timedelta(seconds=30)
+            await game.update_embed()
+
+    @bet.error
+    async def bet_error(self, ctx, error):
+        if isinstance(error, commands.MissingRequiredArgument):
+            await ctx.send("❌ Missing required argument! Please provide all parameters.", ephemeral=True)
+        elif isinstance(error, commands.BadArgument):
+            await ctx.send("❌ Invalid argument! Please check your inputs.", ephemeral=True)
+        else:
+            await ctx.send(f"❌ An error occurred: {str(error)}", ephemeral=True)
+
+async def setup(bot):
+    await bot.add_cog(BetCog(bot))
+    print("✅ BetCog loaded successfully!")
