@@ -17,13 +17,11 @@ class EntertainmentHandler(commands.Cog):
         print("\n🎮 Loading Entertainment Modules...")
         print("=" * 50)
         
-        # Get the root directory (parent of cogs)
         current_file = Path(__file__).resolve()
         cogs_dir = current_file.parent
         root_dir = cogs_dir.parent
         entertainment_dir = root_dir / "entertainment"
         
-        # Debug: Print paths
         print(f"📍 Current file: {current_file}")
         print(f"📁 Root directory: {root_dir}")
         print(f"🎮 Looking for entertainment at: {entertainment_dir}")
@@ -35,11 +33,9 @@ class EntertainmentHandler(commands.Cog):
             
         print(f"✅ Entertainment directory found: {entertainment_dir}")
         
-        # Add entertainment directory to Python path
         if str(entertainment_dir.parent) not in sys.path:
             sys.path.insert(0, str(entertainment_dir.parent))
         
-        # Find all Python files
         python_files = [f for f in entertainment_dir.iterdir() 
                        if f.suffix == '.py' and f.name != '__init__.py']
         
@@ -52,30 +48,25 @@ class EntertainmentHandler(commands.Cog):
         for f in python_files:
             print(f"   - {f.name}")
         
-        # Load each module
         for file_path in sorted(python_files):
             module_name = file_path.stem
             print(f"\n🔄 Loading: {module_name}")
             
             try:
-                # Remove from sys.modules if already loaded
                 full_module_name = f'entertainment.{module_name}'
                 if full_module_name in sys.modules:
                     del sys.modules[full_module_name]
                 
-                # Create module spec
                 spec = importlib.util.spec_from_file_location(
                     full_module_name,
                     file_path
                 )
                 
                 if spec and spec.loader:
-                    # Load the module
                     module = importlib.util.module_from_spec(spec)
                     sys.modules[full_module_name] = module
                     spec.loader.exec_module(module)
                     
-                    # Check for setup function
                     if hasattr(module, 'setup'):
                         await module.setup(self.bot)
                         self.loaded_modules.append(module_name)
@@ -94,7 +85,6 @@ class EntertainmentHandler(commands.Cog):
                 traceback.print_exc()
                 self.failed_modules.append((module_name, error_msg))
         
-        # Summary
         print("\n" + "=" * 50)
         print("📊 Entertainment Module Summary:")
         print(f"  ✅ Loaded: {len(self.loaded_modules)} module(s)")
@@ -105,11 +95,29 @@ class EntertainmentHandler(commands.Cog):
             for name, reason in self.failed_modules:
                 print(f"     {name}: {reason}")
         print("=" * 50 + "\n")
+        
+        # Force sync commands after loading
+        if self.loaded_modules:
+            await self.force_sync_commands()
+    
+    async def force_sync_commands(self):
+        """Force sync all commands to Discord"""
+        try:
+            print("\n🔄 Force syncing commands...")
+            synced = await self.bot.tree.sync()
+            print(f"✅ Successfully synced {len(synced)} commands")
+            
+            # List all synced commands
+            print("📋 Synced commands:")
+            for cmd in synced:
+                print(f"   - /{cmd.name}")
+                
+        except Exception as e:
+            print(f"❌ Failed to sync commands: {e}")
     
     @commands.command(name="entertainment", aliases=["ent", "games"])
     @commands.is_owner()
     async def entertainment_status(self, ctx):
-        """Check the status of entertainment modules"""
         embed = discord.Embed(
             title="🎮 Entertainment Module Status",
             color=discord.Color.blue(),
@@ -138,7 +146,6 @@ class EntertainmentHandler(commands.Cog):
                 inline=False
             )
         
-        # Show active cogs
         cogs_list = []
         for cog_name, cog in self.bot.cogs.items():
             if any(mod.lower() in cog_name.lower() for mod in self.loaded_modules):
@@ -151,7 +158,6 @@ class EntertainmentHandler(commands.Cog):
                 inline=False
             )
         
-        # Add directory info
         root_dir = Path(__file__).resolve().parent.parent
         entertainment_dir = root_dir / "entertainment"
         
@@ -161,6 +167,25 @@ class EntertainmentHandler(commands.Cog):
             inline=False
         )
         
+        # Show available slash commands
+        slash_commands = []
+        for cmd in self.bot.tree.get_commands():
+            if cmd.name == "bet":
+                slash_commands.append(f"✅ /{cmd.name} - {cmd.description}")
+        
+        if slash_commands:
+            embed.add_field(
+                name="🎯 Available Slash Commands",
+                value="\n".join(slash_commands),
+                inline=False
+            )
+        else:
+            embed.add_field(
+                name="⚠️ No Entertainment Commands",
+                value="No entertainment slash commands found. Try `/sync` or restart the bot.",
+                inline=False
+            )
+        
         embed.set_footer(text="Use /bet to try the betting game!")
         
         await ctx.send(embed=embed)
@@ -168,13 +193,10 @@ class EntertainmentHandler(commands.Cog):
     @commands.command(name="reload_entertainment", aliases=["reload_ent"])
     @commands.is_owner()
     async def reload_entertainment(self, ctx):
-        """Reload all entertainment modules"""
         await ctx.send("🔄 Reloading entertainment modules...")
         
-        # Remove existing entertainment cogs
         for module_name in self.loaded_modules[:]:
             try:
-                # Find and remove cog
                 for name, cog in list(self.bot.cogs.items()):
                     if module_name.lower() in name.lower():
                         await self.bot.remove_cog(name)
@@ -182,11 +204,9 @@ class EntertainmentHandler(commands.Cog):
             except:
                 pass
         
-        # Clear lists
         self.loaded_modules.clear()
         self.failed_modules.clear()
         
-        # Reload
         await self.cog_load()
         
         embed = discord.Embed(
@@ -203,7 +223,34 @@ class EntertainmentHandler(commands.Cog):
             )
             
         await ctx.send(embed=embed)
+    
+    @commands.command(name="sync")
+    @commands.is_owner()
+    async def sync_commands(self, ctx):
+        """Manually sync slash commands"""
+        await ctx.send("🔄 Syncing commands...")
+        try:
+            synced = await self.bot.tree.sync()
+            embed = discord.Embed(
+                title="✅ Commands Synced",
+                description=f"Successfully synced {len(synced)} commands",
+                color=discord.Color.green()
+            )
+            
+            cmd_list = []
+            for cmd in synced:
+                cmd_list.append(f"• /{cmd.name}")
+            
+            if cmd_list:
+                embed.add_field(
+                    name="📋 Available Commands",
+                    value="\n".join(cmd_list[:10]),
+                    inline=False
+                )
+                
+            await ctx.send(embed=embed)
+        except Exception as e:
+            await ctx.send(f"❌ Failed to sync: {e}")
 
 async def setup(bot):
-    """Setup function to add this cog to the bot"""
     await bot.add_cog(EntertainmentHandler(bot))

@@ -465,6 +465,13 @@ class BetCog(commands.Cog):
         self.db = bot.db
         self.active_games = {}
         self.cleanup_games.start()
+        
+    async def cog_load(self):
+        try:
+            synced = await self.bot.tree.sync()
+            print(f"✅ BetCog: Synced {len(synced)} commands")
+        except Exception as e:
+            print(f"❌ BetCog: Failed to sync commands: {e}")
     
     async def get_user_data(self, user_id: int):
         user = await self.db.users.find_one({"user_id": user_id})
@@ -490,6 +497,10 @@ class BetCog(commands.Cog):
         
         for channel_id in to_remove:
             del self.active_games[channel_id]
+    
+    @cleanup_games.before_loop
+    async def before_cleanup_games(self):
+        await self.bot.wait_until_ready()
     
     @commands.hybrid_command(name="bet", description="Start a betting game!")
     @app_commands.describe(
@@ -568,6 +579,3 @@ class BetCog(commands.Cog):
             elif game.phase == "joining":
                 await game.cancel_game()
                 del self.active_games[ctx.channel.id]
-
-async def setup(bot):
-    await bot.add_cog(BetCog(bot))

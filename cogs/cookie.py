@@ -1,7 +1,3 @@
-# cogs/cookie.py
-# Location: cogs/cookie.py
-# Description: Cookie distribution cog with fixed role caching and memory management
-
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands
@@ -28,6 +24,8 @@ class CookieView(discord.ui.View):
             if self.response:
                 await self.response.edit(view=self)
         except discord.NotFound:
+            pass
+        except Exception:
             pass
             
     async def interaction_check(self, interaction: discord.Interaction):
@@ -243,17 +241,14 @@ class CookieCog(commands.Cog):
         return True, None
     
     def clear_user_cache(self, user_id: int):
-        """Clear all cached values for a specific user"""
         keys_to_remove = []
         
-        # Clear from cooldown cache
         for key in list(self.cooldown_cache.keys()):
             if key.startswith(f"{user_id}:"):
                 keys_to_remove.append(key)
         for key in keys_to_remove:
             self.cooldown_cache.pop(key, None)
         
-        # Clear from role cache
         keys_to_remove = []
         for key in list(self.role_cache.keys()):
             if key.startswith(f"{user_id}:"):
@@ -269,7 +264,6 @@ class CookieCog(commands.Cog):
         role_key = self.get_user_role_key(user)
         cache_key = f"{role_key}:{cookie_type}:cooldown"
         
-        # Check cache with expiration
         if not force_refresh and cache_key in self.cooldown_cache:
             cached_time, value = self.cooldown_cache[cache_key]
             if datetime.now() - cached_time < timedelta(minutes=5):
@@ -280,7 +274,6 @@ class CookieCog(commands.Cog):
         else:
             min_cooldown = server["cookies"][cookie_type]["cooldown"]
             
-            # Refresh server data to get latest role configurations
             server = await self.db.servers.find_one({"server_id": user.guild.id})
             if server and server.get("roles"):
                 for role in user.roles:
@@ -291,7 +284,6 @@ class CookieCog(commands.Cog):
             
             cooldown = min_cooldown
         
-        # Store with timestamp
         self.cooldown_cache[cache_key] = (datetime.now(), cooldown)
         return cooldown
     
@@ -299,7 +291,6 @@ class CookieCog(commands.Cog):
         role_key = self.get_user_role_key(user)
         cache_key = f"{role_key}:{cookie_type}:cost"
         
-        # Check cache with expiration
         if not force_refresh and cache_key in self.role_cache:
             cached_time, value = self.role_cache[cache_key]
             if datetime.now() - cached_time < timedelta(minutes=5):
@@ -310,7 +301,6 @@ class CookieCog(commands.Cog):
         else:
             min_cost = server["cookies"][cookie_type]["cost"]
             
-            # Refresh server data to get latest role configurations
             server = await self.db.servers.find_one({"server_id": user.guild.id})
             if server and server.get("roles"):
                 for role in user.roles:
@@ -322,7 +312,6 @@ class CookieCog(commands.Cog):
             
             cost = min_cost
         
-        # Store with timestamp
         self.role_cache[cache_key] = (datetime.now(), cost)
         return cost
     
@@ -520,7 +509,6 @@ class CookieCog(commands.Cog):
                     inline=False
                 )
                 
-                # Create the two buttons
                 button1 = discord.ui.Button(
                     label="Quick Feedback (Optional)",
                     style=discord.ButtonStyle.success,
@@ -589,13 +577,14 @@ class CookieCog(commands.Cog):
                 description="An unexpected error occurred. Please try again!",
                 color=discord.Color.red()
             )
-            await interaction.followup.send(embed=error_embed, ephemeral=True)
+            try:
+                await interaction.followup.send(embed=error_embed, ephemeral=True)
+            except:
+                pass
     
     @commands.hybrid_command(name="cookie", description="Claim a cookie with interactive menu")
     async def cookie(self, ctx):
         try:
-            await ctx.defer(ephemeral=True)
-            
             if not await self.check_maintenance(ctx):
                 return
             
@@ -641,7 +630,6 @@ class CookieCog(commands.Cog):
             
             user_data = await self.get_or_create_user(ctx.author.id, str(ctx.author))
             
-            # Pre-calculate costs for all cookies with fresh server data
             costs_dict = {}
             for cookie_type in server["cookies"].keys():
                 costs_dict[cookie_type] = await self.get_user_cost(ctx.author, server, cookie_type, force_refresh=True)
@@ -689,13 +677,20 @@ class CookieCog(commands.Cog):
                 description="An unexpected error occurred. Please try again!",
                 color=discord.Color.red()
             )
-            await ctx.send(embed=error_embed, ephemeral=True)
+            try:
+                await ctx.send(embed=error_embed, ephemeral=True)
+            except:
+                pass
     
     @commands.hybrid_command(name="stock", description="Check cookie stock with beautiful display")
     @app_commands.describe(type="The type of cookie to check stock for (leave empty for all)")
     @app_commands.autocomplete(type=cookie_autocomplete)
     async def stock(self, ctx, type: str = None):
         try:
+            interaction = ctx.interaction
+            if interaction and not interaction.response.is_done():
+                await interaction.response.defer(ephemeral=True)
+            
             server = await self.db.servers.find_one({"server_id": ctx.guild.id})
             if not server:
                 await ctx.send("❌ Server not configured!", ephemeral=True)
@@ -801,17 +796,21 @@ class CookieCog(commands.Cog):
                 
                 embed.set_footer(text=f"Total Stock: {total_stock} files | Health: {health}")
             
-            await ctx.send(embed=embed, ephemeral=True)
+            if interaction and interaction.response.is_done():
+                await interaction.followup.send(embed=embed, ephemeral=True)
+            else:
+                await ctx.send(embed=embed, ephemeral=True)
             
         except Exception as e:
             print(f"Error in stock command: {e}")
-            await ctx.send("❌ An error occurred!", ephemeral=True)
+            try:
+                await ctx.send("❌ An error occurred!", ephemeral=True)
+            except:
+                pass
     
     @commands.hybrid_command(name="refresh", description="Refresh your role benefits")
     async def refresh(self, ctx):
-        """Force refresh role benefits for a user"""
         try:
-            # Clear user's cache
             self.clear_user_cache(ctx.author.id)
             
             embed = discord.Embed(
@@ -820,7 +819,6 @@ class CookieCog(commands.Cog):
                 color=discord.Color.green()
             )
             
-            # Get fresh server data
             server = await self.db.servers.find_one({"server_id": ctx.guild.id})
             if server and server.get("role_based"):
                 role_benefits = []
@@ -856,10 +854,8 @@ class CookieCog(commands.Cog):
     @commands.Cog.listener()
     async def on_member_update(self, before, after):
         if before.roles != after.roles:
-            # Clear all caches for this user when their roles change
             self.clear_user_cache(after.id)
             
-            # Log role changes for debugging
             added_roles = set(after.roles) - set(before.roles)
             removed_roles = set(before.roles) - set(after.roles)
             
