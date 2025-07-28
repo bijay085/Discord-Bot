@@ -2,4 +2,4 @@ setup/.env
 cogs/__pycache__/
 cookies/
 bot.log
-cogs/games/__pycache__/
+bot_core/__pycache__/
