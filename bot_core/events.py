@@ -1,9 +1,10 @@
 import discord
 from discord.ext import commands
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import platform
 import psutil
 import logging
+import asyncio
 from .views import BotControlView
 
 logger = logging.getLogger('CookieBot')
@@ -13,24 +14,96 @@ class EventHandler:
         self.bot = bot
         
     async def on_ready(self):
-        print(f"✅ Bot logged in as {self.bot.user} (ID: {self.bot.user.id})")
-        print(f"🌐 Connected to {len(self.bot.guilds)} servers with {sum(g.member_count for g in self.bot.guilds):,} total users")
+        print(f"✅ Logged in as {self.bot.user} (ID: {self.bot.user.id})")
+        print(f"📊 {len(self.bot.guilds)} servers | {sum(g.member_count for g in self.bot.guilds):,} users")
         
         try:
             synced = await self.bot.tree.sync()
-            print(f"🔄 Synced {len(synced)} slash commands globally")
-            
-            all_commands = list(self.bot.tree.get_commands())
-            guild_commands = list(self.bot.tree.get_commands(guild=None))
-            
-            print(f"📋 Total commands available: {len(all_commands)}")
-            
-            for guild in self.bot.guilds[:5]:
-                print(f"  ✓ Connected to {guild.name} ({guild.member_count} members)")
-                    
+            print(f"🔄 Synced {len(synced)} commands")
         except Exception as e:
             logger.error(f"❌ Failed to sync commands: {e}")
-            print(f"❌ Failed to sync commands: {e}")
+            print(f"❌ Failed to sync commands")
+        
+        # Send announcement to announcement channels from database
+        await asyncio.sleep(2)  # Small delay to ensure everything is loaded
+        
+        # Get all servers with announcement channels configured
+        servers_with_announcement = await self.bot.db.servers.find({
+            "channels.announcement": {"$exists": True, "$ne": None},
+            "enabled": True
+        }).to_list(None)
+        
+        if servers_with_announcement:
+            # Get bot statistics once
+            total_users = await self.bot.db.users.count_documents({})
+            total_cookies_claimed = await self.bot.db.statistics.find_one({"_id": "global_stats"})
+            active_users_today = await self.bot.db.users.count_documents({
+                "last_active": {"$gte": datetime.now(timezone.utc) - timedelta(days=1)}
+            })
+            
+            # Get top claimed cookie
+            top_cookie = "Unknown"
+            if total_cookies_claimed and total_cookies_claimed.get("total_claims"):
+                top_cookie_data = max(total_cookies_claimed["total_claims"].items(), 
+                                     key=lambda x: x[1], default=("Unknown", 0))
+                top_cookie = top_cookie_data[0].title()
+            
+            # Send to each server's announcement channel
+            for server_data in servers_with_announcement:
+                announcement_channel_id = server_data["channels"]["announcement"]
+                announcement_channel = self.bot.get_channel(announcement_channel_id)
+                
+                if announcement_channel:
+                    try:
+                        announcement_embed = discord.Embed(
+                            title="🟢 Cookie Bot is Online!",
+                            description="The bot has successfully restarted and is ready to serve cookies!",
+                            color=0x00ff00,
+                            timestamp=datetime.now(timezone.utc)
+                        )
+                        
+                        announcement_embed.add_field(
+                            name="📊 Bot Statistics",
+                            value=f"```\n"
+                                  f"Servers    : {len(self.bot.guilds):,}\n"
+                                  f"Total Users: {sum(g.member_count for g in self.bot.guilds):,}\n"
+                                  f"Registered : {total_users:,}\n"
+                                  f"Active 24h : {active_users_today:,}\n"
+                                  f"```",
+                            inline=False
+                        )
+                        
+                        announcement_embed.add_field(
+                            name="🍪 Cookie Stats",
+                            value=f"```\n"
+                                  f"Total Claims: {total_cookies_claimed.get('all_time_claims', 0) if total_cookies_claimed else 0:,}\n"
+                                  f"Top Cookie  : {top_cookie}\n"
+                                  f"Latency     : {round(self.bot.latency * 1000)}ms\n"
+                                  f"```",
+                            inline=False
+                        )
+                        
+                        announcement_embed.add_field(
+                            name="💻 System Info",
+                            value=f"```\n"
+                                  f"Python : {platform.python_version()}\n"
+                                  f"Discord: {discord.__version__}\n"
+                                  f"RAM    : {psutil.virtual_memory().percent}%\n"
+                                  f"CPU    : {psutil.cpu_percent()}%\n"
+                                  f"```",
+                            inline=False
+                        )
+                        
+                        announcement_embed.set_thumbnail(url=self.bot.user.avatar.url)
+                        announcement_embed.set_footer(text="Cookie Bot v2.0 | Premium Edition")
+                        
+                        await announcement_channel.send(embed=announcement_embed)
+                    except discord.Forbidden:
+                        print(f"❌ No permission to send in {server_data.get('server_name', 'Unknown')} announcement channel")
+                    except Exception as e:
+                        print(f"❌ Failed to send announcement to {server_data.get('server_name', 'Unknown')}: {e}")
+                else:
+                    print(f"❌ Announcement channel {announcement_channel_id} not found for {server_data.get('server_name', 'Unknown')}")
         
         config = await self.bot.db.config.find_one({"_id": "bot_config"})
         if config and config.get("main_log_channel"):
@@ -56,7 +129,7 @@ class EventHandler:
                 self.bot.status_messages[channel.id] = message.id
     
     async def on_guild_join(self, guild):
-        print(f"🎉 Joined new server: {guild.name} (ID: {guild.id}) with {guild.member_count} members")
+        print(f"➕ Joined: {guild.name} ({guild.member_count} members)")
         
         embed = discord.Embed(
             title="🍪 Welcome to Cookie Bot Premium!",
@@ -149,7 +222,6 @@ class EventHandler:
         
         if not welcome_sent:
             logger.warning(f"Could not send welcome message to {guild.name}")
-            print(f"⚠️ Could not send welcome message to {guild.name}")
         
         await self.bot.db.servers.insert_one({
             "server_id": guild.id,
@@ -186,7 +258,7 @@ class EventHandler:
                 await channel.send(embed=log_embed)
     
     async def on_guild_remove(self, guild):
-        print(f"👋 Removed from server: {guild.name} (ID: {guild.id})")
+        print(f"➖ Left: {guild.name}")
         
         await self.bot.db.servers.update_one(
             {"server_id": guild.id},

@@ -14,7 +14,7 @@ class DatabaseHandler:
         for collection in collections:
             if collection not in existing:
                 await self.bot.db.create_collection(collection)
-                print(f"📂 Created collection: {collection}")
+                print(f"📂 Created: {collection}")
         
         indexes = {
             'users': [
@@ -44,13 +44,10 @@ class DatabaseHandler:
                             index_config['keys'],
                             unique=index_config.get('unique', False)
                         )
-                        print(f"📑 Created index {index_name} on {collection}")
-                    else:
-                        print(f"✓ Index {index_name} already exists on {collection}")
+                        print(f"📑 Index created: {index_name}")
                         
             except Exception as e:
-                logger.warning(f"⚠️ Could not create indexes for {collection}: {e}")
-                print(f"⚠️ Could not create indexes for {collection}: {e}")
+                logger.warning(f"⚠️ Index error for {collection}: {e}")
         
         config = await self.bot.db.config.find_one({"_id": "bot_config"})
         if not config:

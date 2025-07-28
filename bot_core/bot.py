@@ -54,9 +54,11 @@ class CookieBot(commands.Bot):
         self.active_claims = {}
         self.db_handler = DatabaseHandler(self)
         self.event_handler = EventHandler(self)
+        self.status_cooldowns = {}  # Track refresh cooldowns
+        self.spam_violations = {}  # Track spam attempts
         
     async def setup_hook(self):
-        print("🚀 Initializing Cookie Bot...")
+        print("🚀 Initializing...")
         
         self.session = aiohttp.ClientSession()
         webhook_handler.session = self.session
@@ -70,17 +72,14 @@ class CookieBot(commands.Bot):
             webhook_handler.webhook_url = ERROR_WEBHOOK
         
         if not MONGODB_URI:
-            logger.error("❌ MONGODB_URI not found in environment variables!")
-            print("❌ MONGODB_URI not found in environment variables!")
+            logger.error("❌ MONGODB_URI not found!")
             raise ValueError("MONGODB_URI is required")
             
         if not BOT_TOKEN:
-            logger.error("❌ BOT_TOKEN not found in environment variables!")
-            print("❌ BOT_TOKEN not found in environment variables!")
+            logger.error("❌ BOT_TOKEN not found!")
             raise ValueError("BOT_TOKEN is required")
         
         print(f"🔗 Connecting to MongoDB...")
-        print(f"📦 Database: {DATABASE_NAME}")
         
         try:
             self.mongo_client = motor.motor_asyncio.AsyncIOMotorClient(
@@ -97,16 +96,13 @@ class CookieBot(commands.Bot):
             
             self.db = self.mongo_client[DATABASE_NAME]
             
-            print("🔍 Testing MongoDB connection...")
             result = await self.mongo_client.admin.command('ping')
-            print("✅ Successfully connected to MongoDB!")
+            print("✅ MongoDB connected!")
             
             await self.db_handler.initialize_database()
             
         except Exception as e:
-            logger.error(f"❌ Failed to connect to MongoDB: {e}")
-            print(f"❌ Failed to connect to MongoDB: {e}")
-            print(f"📌 Make sure your MongoDB URI is correct and your IP is whitelisted")
+            logger.error(f"❌ MongoDB connection failed: {e}")
             raise
         
         print("📚 Loading cogs...")
@@ -117,7 +113,7 @@ class CookieBot(commands.Bot):
         self.monitor_performance.start()
         self.cleanup_active_claims.start()
         
-        print("✅ Setup complete!")
+        print("✅ Ready!")
         
     async def load_cogs(self):
         core_cogs = [
@@ -133,37 +129,20 @@ class CookieBot(commands.Bot):
         loaded = 0
         failed = 0
         
-        print("\n📦 Loading Core Cogs:")
-        print("-" * 30)
-        
         for cog in core_cogs:
             try:
                 await self.load_extension(cog)
-                print(f"  ✅ {cog}")
                 loaded += 1
             except Exception as e:
-                logger.error(f"Failed to load cog {cog}: {e}")
-                print(f"  ❌ {cog}: {str(e)[:50]}...")
+                logger.error(f"Failed to load {cog}: {e}")
                 failed += 1
         
-        print(f"\n📊 Core Cogs: {loaded} loaded, {failed} failed")
+        print(f"📦 Core: {loaded} loaded, {failed} failed")
         
         try:
-            print("\n🎮 Loading Entertainment Module...")
             await self.load_extension("cogs.entertainment_handler")
-            print("  ✅ Entertainment handler loaded")
         except Exception as e:
-            print(f"  ❌ Entertainment handler failed: {e}")
-            
-            entertainment_path = os.path.join(os.path.dirname(__file__), '..', 'cogs', 'entertainment')
-            if os.path.exists(entertainment_path):
-                print(f"  📁 Entertainment folder exists at: {entertainment_path}")
-                files = [f for f in os.listdir(entertainment_path) if f.endswith('.py')]
-                print(f"  📋 Found {len(files)} Python files: {', '.join(files)}")
-            else:
-                print(f"  ❌ Entertainment folder not found at: {entertainment_path}")
-        
-        print(f"\n✅ Total loaded: {loaded + (1 if 'cogs.entertainment_handler' in self.extensions else 0)}")
+            print(f"❌ Entertainment failed: {e}")
     
     @tasks.loop(minutes=5)
     async def update_presence(self):
@@ -234,8 +213,7 @@ class CookieBot(commands.Bot):
             latency = round(self.latency * 1000) if self.latency and not math.isnan(self.latency) else 0
             
             if latency > 200:
-                logger.warning(f"⚠️ High latency detected: {latency}ms")
-                print(f"⚠️ High latency detected: {latency}ms")
+                print(f"⚠️ High latency: {latency}ms")
                 
             cpu_percent = psutil.cpu_percent(interval=1)
             memory = psutil.virtual_memory()
@@ -272,6 +250,107 @@ class CookieBot(commands.Bot):
     async def on_ready(self):
         await self.event_handler.on_ready()
     
+    async def on_message(self, message):
+        # Ignore messages from bots
+        if message.author.bot:
+            return
+        
+        # Check if message is ONLY a mention of the bot
+        if message.content.strip() == f"<@{self.user.id}>" or message.content.strip() == f"<@!{self.user.id}>":
+            # Create the status view with refresh button
+            view = StatusRefreshView(self, message.author.id)
+            
+            # Get initial embed
+            embed = await self.create_status_embed()
+            
+            # Send the message
+            sent_message = await message.reply(embed=embed, view=view, mention_author=False)
+            view.message = sent_message
+            return
+        
+        # Process commands normally
+        await self.process_commands(message)
+    
+    async def create_status_embed(self):
+        """Create the status embed with current statistics"""
+        # Get bot statistics
+        total_cookies = await self.get_total_cookies()
+        total_users = await self.db.users.count_documents({})
+        active_users = await self.db.users.count_documents({
+            "last_active": {"$gte": datetime.now(timezone.utc) - timedelta(days=1)}
+        })
+        
+        # Create stats embed
+        embed = discord.Embed(
+            title="🍪 Cookie Bot Status",
+            color=discord.Color.blue(),
+            timestamp=datetime.now(timezone.utc)
+        )
+        
+        embed.add_field(
+            name="⏰ Uptime",
+            value=f"```{self.get_uptime()}```",
+            inline=True
+        )
+        
+        embed.add_field(
+            name="📡 Latency",
+            value=f"```{round(self.latency * 1000)}ms```",
+            inline=True
+        )
+        
+        embed.add_field(
+            name="📊 Servers",
+            value=f"```{len(self.guilds):,}```",
+            inline=True
+        )
+        
+        embed.add_field(
+            name="👥 Total Users",
+            value=f"```{sum(g.member_count for g in self.guilds):,}```",
+            inline=True
+        )
+        
+        embed.add_field(
+            name="📝 Registered",
+            value=f"```{total_users:,}```",
+            inline=True
+        )
+        
+        embed.add_field(
+            name="🟢 Active (24h)",
+            value=f"```{active_users:,}```",
+            inline=True
+        )
+        
+        embed.add_field(
+            name="🍪 Total Cookies Claimed",
+            value=f"```{total_cookies:,}```",
+            inline=False
+        )
+        
+        embed.add_field(
+            name="💾 Memory Usage",
+            value=f"```{psutil.virtual_memory().percent}%```",
+            inline=True
+        )
+        
+        embed.add_field(
+            name="⚡ Commands",
+            value=f"```{len(self.commands)}```",
+            inline=True
+        )
+        
+        embed.set_author(name=self.user.name, icon_url=self.user.avatar.url)
+        embed.set_footer(text="Use /help to see all commands")
+        
+        return embed
+    
+    async def get_total_cookies(self):
+        """Get total cookies distributed"""
+        stats = await self.db.statistics.find_one({"_id": "global_stats"})
+        return stats.get("all_time_claims", 0) if stats else 0
+    
     async def on_guild_join(self, guild):
         await self.event_handler.on_guild_join(guild)
     
@@ -285,7 +364,7 @@ class CookieBot(commands.Bot):
         await self.event_handler.on_command_error(ctx, error)
     
     async def close(self):
-        print("🛑 Shutting down Cookie Bot...")
+        print("🛑 Shutting down...")
         
         config = await self.db.config.find_one({"_id": "bot_config"})
         if config and config.get("main_log_channel"):
@@ -327,3 +406,87 @@ class CookieBot(commands.Bot):
             parts.append(f"{seconds}s")
             
         return " ".join(parts)
+
+class StatusRefreshView(discord.ui.View):
+    def __init__(self, bot, user_id):
+        super().__init__(timeout=None)  # No timeout - button works forever
+        self.bot = bot
+        self.user_id = user_id
+        self.message = None
+        
+    @discord.ui.button(label="Refresh", style=discord.ButtonStyle.primary, emoji="🔄")
+    async def refresh_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Check cooldown
+        user_id = interaction.user.id
+        now = datetime.now(timezone.utc)
+        
+        # Check if user has a penalty
+        if user_id in self.bot.spam_violations:
+            penalty_end = self.bot.spam_violations[user_id]
+            if now < penalty_end:
+                remaining_minutes = (penalty_end - now).total_seconds() / 60
+                await interaction.response.send_message(
+                    f"🚫 You have been temporarily restricted for spamming!\n"
+                    f"⏰ Try again in **{remaining_minutes:.1f}** minutes.",
+                    ephemeral=True
+                )
+                return
+            else:
+                # Penalty expired, remove it
+                del self.bot.spam_violations[user_id]
+        
+        # Check regular cooldown
+        if user_id in self.bot.status_cooldowns:
+            last_refresh, violation_count = self.bot.status_cooldowns[user_id]
+            time_passed = (now - last_refresh).total_seconds()
+            
+            if time_passed < 120:  # 2 minute cooldown
+                remaining = 120 - time_passed
+                
+                # Increment violation count
+                new_violation_count = violation_count + 1
+                self.bot.status_cooldowns[user_id] = (last_refresh, new_violation_count)
+                
+                # Check if they've tried 3 times during cooldown
+                if new_violation_count >= 3:
+                    # Apply 20-minute penalty
+                    penalty_end = now + timedelta(minutes=20)
+                    self.bot.spam_violations[user_id] = penalty_end
+                    
+                    # Reset their cooldown tracking
+                    if user_id in self.bot.status_cooldowns:
+                        del self.bot.status_cooldowns[user_id]
+                    
+                    await interaction.response.send_message(
+                        f"🚫 **SPAM DETECTED!**\n"
+                        f"You have been restricted for **20 minutes** for attempting to spam the refresh button.\n"
+                        f"Please be patient and wait for cooldowns!",
+                        ephemeral=True
+                    )
+                    return
+                else:
+                    # Show remaining cooldown
+                    minutes = int(remaining // 60)
+                    seconds = int(remaining % 60)
+                    await interaction.response.send_message(
+                        f"⏰ Please wait **{minutes}m {seconds}s** before refreshing again!\n"
+                        f"⚠️ Warning: {3 - new_violation_count} more attempts during cooldown will result in a 20-minute restriction.",
+                        ephemeral=True
+                    )
+                    return
+        
+        # Update cooldown (last refresh time, violation count)
+        self.bot.status_cooldowns[user_id] = (now, 0)
+        
+        # Defer the response
+        await interaction.response.defer()
+        
+        # Get new embed
+        new_embed = await self.bot.create_status_embed()
+        
+        # Update the message
+        await interaction.followup.edit_message(
+            message_id=self.message.id,
+            embed=new_embed,
+            view=self
+        )

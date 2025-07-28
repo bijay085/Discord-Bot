@@ -16,7 +16,6 @@ class EntertainmentHandler(commands.Cog):
         entertainment_dir = Path(__file__).parent.parent / "entertainment"
         
         if not entertainment_dir.exists():
-            print("❌ Entertainment directory not found!")
             return
         
         sys.path.insert(0, str(entertainment_dir.parent))
@@ -25,7 +24,6 @@ class EntertainmentHandler(commands.Cog):
                        if f.suffix == '.py' and f.name != '__init__.py']
         
         if not python_files:
-            print("❌ No modules found!")
             return
         
         for file_path in sorted(python_files):
@@ -44,10 +42,9 @@ class EntertainmentHandler(commands.Cog):
                     if hasattr(module, 'setup'):
                         await module.setup(self.bot)
                         self.loaded_modules.append(module_name)
-                        print(f"✅ Loaded entertainment module: {module_name}")
+                        print(f"🎮 Entertainment: {module_name} loaded")
                     
             except Exception as e:
-                print(f"❌ Failed to load {module_name}: {str(e)[:50]}")
                 self.failed_modules.append(module_name)
     
     @commands.command(name="entertainment", aliases=["ent"])
@@ -71,8 +68,6 @@ class EntertainmentHandler(commands.Cog):
                 value=", ".join(self.failed_modules),
                 inline=False
             )
-        
-
         
         await ctx.send(embed=embed)
     
