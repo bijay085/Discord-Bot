@@ -1,7 +1,3 @@
-# cogs/entertainment/bet.py
-# Location: cogs/entertainment/bet.py
-# Description: Betting system with solo and group modes, points/trust score betting
-
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands
@@ -81,7 +77,6 @@ class BetView(discord.ui.View):
         self.update_buttons()
     
     def update_buttons(self):
-        # Update button states based on game phase
         for item in self.children:
             if isinstance(item, discord.ui.Button):
                 if item.custom_id == "join_bet":
@@ -96,14 +91,12 @@ class BetView(discord.ui.View):
                 await interaction.response.send_message("❌ This is a solo bet! Start your own with `/bet solo`", ephemeral=True)
                 return
             
-            # For solo, directly add with the bet amount
             success = await self.bet_game.add_player(interaction.user, self.bet_game.players[self.bet_game.host_id]["bet"])
             if success:
                 await interaction.response.send_message("✅ Solo bet started!", ephemeral=True)
             else:
                 await interaction.response.send_message("❌ Failed to start!", ephemeral=True)
         else:
-            # For group, show modal for amount
             modal = BetAmountModal(self.bet_game, interaction.user.id)
             await interaction.response.send_modal(modal)
     
@@ -113,7 +106,6 @@ class BetView(discord.ui.View):
             await interaction.response.send_message("❌ Only the host can manage timer!", ephemeral=True)
             return
         
-        # Create timer management view
         timer_view = TimerManageView(self.bet_game)
         await interaction.response.send_message("⏰ Timer Management:", view=timer_view, ephemeral=True)
     
@@ -171,18 +163,18 @@ class BetGame:
     def __init__(self, cog, host, mode: str, currency: str, initial_bet: int = None):
         self.cog = cog
         self.host_id = host.id
-        self.mode = mode  # "solo" or "group"
-        self.currency = currency  # "points" or "trust"
+        self.mode = mode
+        self.currency = currency
         self.channel = None
         self.message = None
         self.view = None
         
-        self.players = {}  # {user_id: {"user": User, "bet": amount}}
-        self.guesses = {}  # {user_id: guess}
-        self.phase = "joining"  # "joining", "guessing", "ended"
+        self.players = {}
+        self.guesses = {}
+        self.phase = "joining"
         
         self.max_players = 50
-        self.timer_end = datetime.now() + timedelta(seconds=60)
+        self.timer_end = datetime.now(timezone.utc) + timedelta(seconds=60)
         self.guess_timer_end = None
         
         self.winning_number = None
@@ -198,16 +190,14 @@ class BetGame:
         if len(self.players) >= self.max_players:
             return False
         
-        # Check balance
         user_data = await self.cog.get_user_data(user.id)
         if self.currency == "points":
             if user_data["points"] < amount:
                 return False
-        else:  # trust
+        else:
             if user_data.get("trust_score", 50) < amount:
                 return False
         
-        # Deduct currency
         if self.currency == "points":
             await self.cog.db.users.update_one(
                 {"user_id": user.id},
@@ -222,13 +212,11 @@ class BetGame:
         
         self.players[user.id] = {"user": user, "bet": amount}
         
-        # Update max number based on players
         if self.mode == "group":
             self.max_number = 10 + (len(self.players) * 2)
         
         await self.update_embed()
         
-        # Auto-start if full
         if len(self.players) >= self.max_players:
             await self.start_guessing_phase()
         
@@ -246,7 +234,6 @@ class BetGame:
         
         self.guesses[user_id] = guess
         
-        # Check if all players guessed
         if len(self.guesses) == len(self.players):
             await self.end_game()
         
@@ -258,14 +245,12 @@ class BetGame:
             
         self.phase = "guessing"
         self.winning_number = random.randint(1, self.max_number)
-        self.guess_timer_end = datetime.now() + timedelta(seconds=30)
+        self.guess_timer_end = datetime.now(timezone.utc) + timedelta(seconds=30)
         
-        # Update view buttons
         self.view.update_buttons()
         
         await self.update_embed()
         
-        # Start guess timer
         await asyncio.sleep(30)
         if self.phase == "guessing":
             await self.end_game()
@@ -276,7 +261,6 @@ class BetGame:
             
         self.phase = "ended"
         
-        # Calculate winner
         winner = None
         closest_diff = float('inf')
         
@@ -286,7 +270,6 @@ class BetGame:
                 closest_diff = diff
                 winner = user_id
         
-        # Process winnings
         embed = discord.Embed(
             title="🎲 Bet Results!",
             color=discord.Color.gold(),
@@ -297,7 +280,6 @@ class BetGame:
         embed.add_field(name="💰 Currency", value=self.currency.title(), inline=True)
         
         if winner and closest_diff == 0:
-            # Perfect guess
             winner_data = self.players[winner]
             profit = winner_data["bet"] * 0.5
             total_win = winner_data["bet"] + profit
@@ -329,7 +311,6 @@ class BetGame:
             )
         
         elif winner and self.mode == "group":
-            # Closest guess in group gets 50% of their bet
             winner_data = self.players[winner]
             consolation = winner_data["bet"] * 0.5
             
@@ -354,7 +335,6 @@ class BetGame:
             )
         
         elif winner and self.mode == "solo" and closest_diff <= 2:
-            # Solo close guess gets 15% back
             player_data = self.players[self.host_id]
             consolation = player_data["bet"] * 0.15
             
@@ -378,7 +358,6 @@ class BetGame:
                 inline=False
             )
         
-        # Show all guesses
         if self.guesses:
             guess_list = []
             for user_id, guess in sorted(self.guesses.items(), key=lambda x: abs(x[1] - self.winning_number)):
@@ -392,7 +371,6 @@ class BetGame:
                 inline=False
             )
         
-        # Disable all buttons
         for item in self.view.children:
             item.disabled = True
         
@@ -404,7 +382,6 @@ class BetGame:
             
         self.phase = "ended"
         
-        # Refund all players
         for user_id, player_data in self.players.items():
             if self.currency == "points":
                 await self.cog.db.users.update_one(
@@ -442,7 +419,6 @@ class BetGame:
                 timestamp=datetime.now(timezone.utc)
             )
             
-            # Player list
             if self.players:
                 player_list = []
                 total_pool = sum(p["bet"] for p in self.players.values())
@@ -458,8 +434,7 @@ class BetGame:
                 )
                 embed.add_field(name="💰 Total Pool", value=str(total_pool), inline=True)
             
-            # Timer
-            time_left = max(0, (self.timer_end - datetime.now()).total_seconds())
+            time_left = max(0, (self.timer_end - datetime.now(timezone.utc)).total_seconds())
             embed.add_field(name="⏰ Time Left", value=f"{int(time_left)}s", inline=True)
             
         elif self.phase == "guessing":
@@ -476,7 +451,7 @@ class BetGame:
             )
             
             if self.guess_timer_end:
-                time_left = max(0, (self.guess_timer_end - datetime.now()).total_seconds())
+                time_left = max(0, (self.guess_timer_end - datetime.now(timezone.utc)).total_seconds())
                 embed.add_field(name="⏰ Time Left", value=f"{int(time_left)}s", inline=True)
         
         try:
@@ -488,7 +463,7 @@ class BetCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.db = bot.db
-        self.active_games = {}  # {channel_id: BetGame}
+        self.active_games = {}
         self.cleanup_games.start()
     
     async def get_user_data(self, user_id: int):
@@ -508,7 +483,6 @@ class BetCog(commands.Cog):
     
     @tasks.loop(minutes=5)
     async def cleanup_games(self):
-        # Clean up old games
         to_remove = []
         for channel_id, game in self.active_games.items():
             if game.phase == "ended":
@@ -534,12 +508,10 @@ class BetCog(commands.Cog):
         ]
     )
     async def bet(self, ctx, mode: str, currency: str, amount: Optional[int] = None):
-        # Check if game already exists in channel
         if ctx.channel.id in self.active_games:
             await ctx.send("❌ A bet is already active in this channel!", ephemeral=True)
             return
         
-        # For solo mode, amount is required
         if mode == "solo" and not amount:
             await ctx.send("❌ Please specify an amount for solo bet!", ephemeral=True)
             return
@@ -548,7 +520,6 @@ class BetCog(commands.Cog):
             await ctx.send("❌ Bet amount must be positive!", ephemeral=True)
             return
         
-        # Check user balance for solo
         if mode == "solo" and amount:
             user_data = await self.get_user_data(ctx.author.id)
             if currency == "points":
@@ -560,11 +531,9 @@ class BetCog(commands.Cog):
                     await ctx.send(f"❌ You need {amount} trust! You have: {user_data.get('trust_score', 50)}", ephemeral=True)
                     return
         
-        # Create game
         game = BetGame(self, ctx.author, mode, currency, amount)
         game.channel = ctx.channel
         
-        # Create embed
         if mode == "solo":
             embed = discord.Embed(
                 title="🎲 Solo Bet Started!",
@@ -584,18 +553,14 @@ class BetCog(commands.Cog):
             embed.add_field(name="⏰ Timer", value="60s", inline=True)
             embed.add_field(name="💰 Profit", value="50% on win", inline=True)
         
-        # Create view
         view = BetView(game)
         game.view = view
         
-        # Send message
         message = await ctx.send(embed=embed, view=view)
         game.message = message
         
-        # Store game
         self.active_games[ctx.channel.id] = game
         
-        # Start timer for joining phase
         if mode == "group":
             await asyncio.sleep(60)
             if game.phase == "joining" and len(game.players) > 0:
@@ -605,5 +570,4 @@ class BetCog(commands.Cog):
                 del self.active_games[ctx.channel.id]
 
 async def setup(bot):
-    # This is called when loading the cog directly
     await bot.add_cog(BetCog(bot))

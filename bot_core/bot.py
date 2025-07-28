@@ -1,7 +1,3 @@
-# bot_core/bot.py
-# Location: bot_core/bot.py
-# Description: Main bot class with connection pooling and cleanup fixes
-
 import discord
 from discord.ext import commands, tasks
 import motor.motor_asyncio
@@ -124,7 +120,7 @@ class CookieBot(commands.Bot):
         print("✅ Setup complete!")
         
     async def load_cogs(self):
-        cogs = [
+        core_cogs = [
             "cogs.cookie",
             "cogs.points",
             "cogs.admin",
@@ -135,16 +131,39 @@ class CookieBot(commands.Bot):
         ]
         
         loaded = 0
-        for cog in cogs:
+        failed = 0
+        
+        print("\n📦 Loading Core Cogs:")
+        print("-" * 30)
+        
+        for cog in core_cogs:
             try:
                 await self.load_extension(cog)
-                print(f"✅ Loaded cog: {cog}")
+                print(f"  ✅ {cog}")
                 loaded += 1
             except Exception as e:
-                logger.error(f"❌ Failed to load cog {cog}: {e}")
-                print(f"❌ Failed to load cog {cog}: {e}")
+                logger.error(f"Failed to load cog {cog}: {e}")
+                print(f"  ❌ {cog}: {str(e)[:50]}...")
+                failed += 1
         
-        print(f"📦 Loaded {loaded}/{len(cogs)} cogs successfully")
+        print(f"\n📊 Core Cogs: {loaded} loaded, {failed} failed")
+        
+        try:
+            print("\n🎮 Loading Entertainment Module...")
+            await self.load_extension("cogs.entertainment_handler")
+            print("  ✅ Entertainment handler loaded")
+        except Exception as e:
+            print(f"  ❌ Entertainment handler failed: {e}")
+            
+            entertainment_path = os.path.join(os.path.dirname(__file__), '..', 'cogs', 'entertainment')
+            if os.path.exists(entertainment_path):
+                print(f"  📁 Entertainment folder exists at: {entertainment_path}")
+                files = [f for f in os.listdir(entertainment_path) if f.endswith('.py')]
+                print(f"  📋 Found {len(files)} Python files: {', '.join(files)}")
+            else:
+                print(f"  ❌ Entertainment folder not found at: {entertainment_path}")
+        
+        print(f"\n✅ Total loaded: {loaded + (1 if 'cogs.entertainment_handler' in self.extensions else 0)}")
     
     @tasks.loop(minutes=5)
     async def update_presence(self):
