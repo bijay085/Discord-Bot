@@ -30,14 +30,16 @@ class CookieView(discord.ui.View):
         return True
 
 class CookieSelectMenu(discord.ui.Select):
-    def __init__(self, server_data, user_data):
+    def __init__(self, server_data, user_data, member, costs_dict):
         self.server_data = server_data
         self.user_data = user_data
+        self.member = member
+        self.costs_dict = costs_dict
         
         options = []
         for cookie_type, config in server_data["cookies"].items():
             if config.get("enabled", True):
-                cost = config["cost"]
+                cost = self.costs_dict.get(cookie_type, config["cost"])
                 can_afford = user_data["points"] >= cost
                 emoji = "🟢" if can_afford else "🔴"
                 
@@ -133,8 +135,10 @@ class CookieCog(commands.Cog):
         self.bot = bot
         self.db = bot.db
         self.check_feedback_deadlines.start()
+        self.clear_role_cache.start()
         self.active_claims = {}
         self.cooldown_cache = {}
+        self.role_cache = {}
         
     async def get_or_create_user(self, user_id: int, username: str):
         user = await self.db.users.find_one({"user_id": user_id})
@@ -268,9 +272,34 @@ class CookieCog(commands.Cog):
             return True, expires
         return True, None
     
-    async def get_user_cooldown(self, user: discord.Member, server: dict, cookie_type: str) -> int:
-        cache_key = f"{user.id}:{cookie_type}"
-        if cache_key in self.cooldown_cache:
+    def clear_user_cache(self, user_id: int):
+        """Clear all cached values for a specific user"""
+        keys_to_remove = []
+        
+        # Clear from cooldown cache
+        for key in self.cooldown_cache.keys():
+            if key.startswith(f"{user_id}:"):
+                keys_to_remove.append(key)
+        for key in keys_to_remove:
+            self.cooldown_cache.pop(key, None)
+        
+        # Clear from role cache
+        keys_to_remove = []
+        for key in self.role_cache.keys():
+            if key.startswith(f"{user_id}:"):
+                keys_to_remove.append(key)
+        for key in keys_to_remove:
+            self.role_cache.pop(key, None)
+    
+    def get_user_role_key(self, user: discord.Member) -> str:
+        role_ids = sorted([r.id for r in user.roles if r.id != user.guild.default_role.id])
+        return f"{user.id}:{':'.join(map(str, role_ids))}"
+    
+    async def get_user_cooldown(self, user: discord.Member, server: dict, cookie_type: str, force_refresh: bool = False) -> int:
+        role_key = self.get_user_role_key(user)
+        cache_key = f"{role_key}:{cookie_type}:cooldown"
+        
+        if not force_refresh and cache_key in self.cooldown_cache:
             return self.cooldown_cache[cache_key]
             
         if not server.get("role_based"):
@@ -278,31 +307,55 @@ class CookieCog(commands.Cog):
         else:
             min_cooldown = server["cookies"][cookie_type]["cooldown"]
             
-            for role in user.roles:
-                role_config = server["roles"].get(str(role.id))
-                if role_config:
-                    if "all" in role_config["access"] or cookie_type in role_config["access"]:
-                        min_cooldown = min(min_cooldown, role_config["cooldown"])
+            # Refresh server data to get latest role configurations
+            server = await self.db.servers.find_one({"server_id": user.guild.id})
+            if server and server.get("roles"):
+                for role in user.roles:
+                    role_config = server["roles"].get(str(role.id))
+                    if role_config:
+                        if "all" in role_config["access"] or cookie_type in role_config["access"]:
+                            min_cooldown = min(min_cooldown, role_config["cooldown"])
             
             cooldown = min_cooldown
         
         self.cooldown_cache[cache_key] = cooldown
         return cooldown
     
-    async def get_user_cost(self, user: discord.Member, server: dict, cookie_type: str) -> int:
+    async def get_user_cost(self, user: discord.Member, server: dict, cookie_type: str, force_refresh: bool = False) -> int:
+        role_key = self.get_user_role_key(user)
+        cache_key = f"{role_key}:{cookie_type}:cost"
+        
+        if not force_refresh and cache_key in self.role_cache:
+            return self.role_cache[cache_key]
+            
         if not server.get("role_based"):
-            return server["cookies"][cookie_type]["cost"]
+            cost = server["cookies"][cookie_type]["cost"]
+        else:
+            min_cost = server["cookies"][cookie_type]["cost"]
+            
+            # Refresh server data to get latest role configurations
+            server = await self.db.servers.find_one({"server_id": user.guild.id})
+            if server and server.get("roles"):
+                for role in user.roles:
+                    role_config = server["roles"].get(str(role.id))
+                    if role_config:
+                        if "all" in role_config["access"] or cookie_type in role_config["access"]:
+                            if role_config["cost"] != "default":
+                                min_cost = min(min_cost, role_config["cost"])
+            
+            cost = min_cost
         
-        min_cost = server["cookies"][cookie_type]["cost"]
-        
-        for role in user.roles:
-            role_config = server["roles"].get(str(role.id))
-            if role_config:
-                if "all" in role_config["access"] or cookie_type in role_config["access"]:
-                    if role_config["cost"] != "default":
-                        min_cost = min(min_cost, role_config["cost"])
-        
-        return min_cost
+        self.role_cache[cache_key] = cost
+        return cost
+    
+    @tasks.loop(minutes=5)
+    async def clear_role_cache(self):
+        self.cooldown_cache.clear()
+        self.role_cache.clear()
+    
+    @clear_role_cache.before_loop
+    async def before_clear_role_cache(self):
+        await self.bot.wait_until_ready()
     
     async def cookie_autocomplete(self, interaction: discord.Interaction, current: str) -> List[app_commands.Choice[str]]:
         server = await self.db.servers.find_one({"server_id": interaction.guild_id})
@@ -314,7 +367,7 @@ class CookieCog(commands.Cog):
         choices = []
         for cookie_type, config in server.get("cookies", {}).items():
             if config.get("enabled", True) and cookie_type.lower().startswith(current.lower()):
-                cost = config.get("cost", 0)
+                cost = await self.get_user_cost(interaction.user, server, cookie_type)
                 can_afford = user_data["points"] >= cost
                 emoji = "✅" if can_afford else "❌"
                 choices.append(app_commands.Choice(
@@ -365,7 +418,8 @@ class CookieCog(commands.Cog):
                             color=discord.Color.red()
                         )
                         embed.add_field(name="Time Remaining", value=f"**{hours}h {minutes}m**", inline=False)
-                        embed.set_footer(text="Try a different cookie type!")
+                        embed.add_field(name="Your Cooldown", value=f"**{cooldown_hours}** hours", inline=True)
+                        embed.set_footer(text="Try a different cookie type or get a better role!")
                         
                         await progress_msg.edit(embed=embed)
                         del self.active_claims[interaction.user.id]
@@ -375,6 +429,21 @@ class CookieCog(commands.Cog):
             await progress_msg.edit(embed=CookieProgressEmbed.create_claim_progress(2))
             
             cost = await self.get_user_cost(interaction.user, server, cookie_type)
+            
+            if user_data["points"] < cost:
+                embed = discord.Embed(
+                    title="❌ Insufficient Points",
+                    description=f"You need **{cost}** points to claim a **{cookie_type}** cookie!",
+                    color=discord.Color.red()
+                )
+                embed.add_field(name="Your Balance", value=f"**{user_data['points']}** points", inline=True)
+                embed.add_field(name="Required", value=f"**{cost}** points", inline=True)
+                embed.add_field(name="Need More", value=f"**{cost - user_data['points']}** points", inline=True)
+                embed.set_footer(text="Use /daily or invite friends to earn points!")
+                
+                await progress_msg.edit(embed=embed)
+                del self.active_claims[interaction.user.id]
+                return
             
             directory = cookie_config["directory"]
             if not os.path.exists(directory):
@@ -410,6 +479,7 @@ class CookieCog(commands.Cog):
                 embed.add_field(name="📁 File", value=f"`{selected_file}`", inline=True)
                 embed.add_field(name="💰 Cost", value=f"{cost} points", inline=True)
                 embed.add_field(name="📊 Balance", value=f"{user_data['points'] - cost} points", inline=True)
+                embed.add_field(name="⏰ Your Cooldown", value=f"{cooldown_hours} hours", inline=True)
                 embed.add_field(
                     name="⚠️ Important",
                     value=f"Submit feedback in <#{server['channels']['feedback']}> within **15 minutes** or face a **30-day blacklist**!",
@@ -436,7 +506,9 @@ class CookieCog(commands.Cog):
                                 "file": selected_file,
                                 "server_id": interaction.guild_id,
                                 "feedback_deadline": feedback_deadline,
-                                "feedback_given": False
+                                "feedback_given": False,
+                                "cost_paid": cost,
+                                "cooldown_applied": cooldown_hours
                             }
                         },
                         "$inc": {
@@ -463,6 +535,7 @@ class CookieCog(commands.Cog):
                 )
                 success_embed.add_field(name="💰 Transaction", value=f"-{cost} points", inline=True)
                 success_embed.add_field(name="📊 New Balance", value=f"{user_data['points'] - cost} points", inline=True)
+                success_embed.add_field(name="⏰ Cooldown", value=f"{cooldown_hours} hours", inline=True)
                 success_embed.add_field(
                     name="⏰ Feedback Deadline",
                     value=f"<t:{int(feedback_deadline.timestamp())}:R>",
@@ -487,7 +560,7 @@ class CookieCog(commands.Cog):
                 
                 await self.log_action(
                     interaction.guild_id,
-                    f"🍪 {interaction.user.mention} claimed **{cookie_type}** cookie (`{selected_file}`) [-{cost} points]",
+                    f"🍪 {interaction.user.mention} claimed **{cookie_type}** cookie (`{selected_file}`) [-{cost} points] [Cooldown: {cooldown_hours}h]",
                     discord.Color.green()
                 )
                 
@@ -644,6 +717,8 @@ class CookieCog(commands.Cog):
     @commands.hybrid_command(name="cookie", description="Claim a cookie with interactive menu")
     async def cookie(self, ctx):
         try:
+            await ctx.defer(ephemeral=True)
+            
             if not await self.check_maintenance(ctx):
                 return
             
@@ -689,6 +764,11 @@ class CookieCog(commands.Cog):
             
             user_data = await self.get_or_create_user(ctx.author.id, str(ctx.author))
             
+            # Pre-calculate costs for all cookies with fresh server data
+            costs_dict = {}
+            for cookie_type in server["cookies"].keys():
+                costs_dict[cookie_type] = await self.get_user_cost(ctx.author, server, cookie_type, force_refresh=True)
+            
             embed = discord.Embed(
                 title="🍪 Cookie Shop",
                 description="Select a cookie type from the menu below!",
@@ -698,6 +778,20 @@ class CookieCog(commands.Cog):
             embed.add_field(name="🏆 Trust Score", value=f"{user_data.get('trust_score', 50)}", inline=True)
             embed.add_field(name="📊 Total Claims", value=f"{user_data.get('total_claims', 0)}", inline=True)
             
+            if server.get("role_based"):
+                role_benefits = []
+                for role in ctx.author.roles:
+                    role_config = server["roles"].get(str(role.id))
+                    if role_config:
+                        role_benefits.append(f"• **{role.name}**: {role_config['cooldown']}h cooldown")
+                
+                if role_benefits:
+                    embed.add_field(
+                        name="🎭 Your Role Benefits",
+                        value="\n".join(role_benefits[:3]),
+                        inline=False
+                    )
+            
             favorite = user_data.get("statistics", {}).get("favorite_cookie")
             if favorite:
                 embed.add_field(name="⭐ Favorite", value=favorite.title(), inline=False)
@@ -705,7 +799,7 @@ class CookieCog(commands.Cog):
             embed.set_footer(text="Select a cookie type below")
             
             view = CookieView(self, ctx.author.id)
-            select_menu = CookieSelectMenu(server, user_data)
+            select_menu = CookieSelectMenu(server, user_data, ctx.author, costs_dict)
             view.add_item(select_menu)
             
             response = await ctx.send(embed=embed, view=view, ephemeral=True)
@@ -748,6 +842,9 @@ class CookieCog(commands.Cog):
                 cookie_config = server["cookies"][type]
                 directory = cookie_config["directory"]
                 
+                cost = await self.get_user_cost(ctx.author, server, type)
+                cooldown = await self.get_user_cooldown(ctx.author, server, type)
+                
                 if os.path.exists(directory):
                     files = [f for f in os.listdir(directory) if f.endswith('.txt')]
                     count = len(files)
@@ -768,7 +865,7 @@ class CookieCog(commands.Cog):
                     embed.color = color
                     embed.add_field(
                         name=f"🍪 {type.title()} Cookie",
-                        value=f"**Stock:** {count} files\n**Status:** {status}\n**Cost:** {cookie_config['cost']} points\n**Cooldown:** {cookie_config['cooldown']} hours",
+                        value=f"**Stock:** {count} files\n**Status:** {status}\n**Your Cost:** {cost} points\n**Your Cooldown:** {cooldown} hours",
                         inline=False
                     )
                     
@@ -794,6 +891,8 @@ class CookieCog(commands.Cog):
                         count = len(files)
                         total_stock += count
                         
+                        cost = await self.get_user_cost(ctx.author, server, cookie_type)
+                        
                         if count > 20:
                             emoji = "🟢"
                         elif count > 10:
@@ -803,7 +902,7 @@ class CookieCog(commands.Cog):
                         else:
                             emoji = "🔴"
                         
-                        stock_data.append((cookie_type, count, emoji, cookie_config["cost"]))
+                        stock_data.append((cookie_type, count, emoji, cost))
                 
                 stock_data.sort(key=lambda x: x[1], reverse=True)
                 
@@ -921,7 +1020,78 @@ class CookieCog(commands.Cog):
             await ctx.send("❌ An error occurred!", ephemeral=True)
     
     @commands.Cog.listener()
-    async def on_message(self, message):
+    async def on_member_update(self, before, after):
+        if before.roles != after.roles:
+            # Clear all caches for this user when their roles change
+            self.clear_user_cache(after.id)
+            
+            # Log role changes for debugging
+            added_roles = set(after.roles) - set(before.roles)
+            removed_roles = set(before.roles) - set(after.roles)
+            
+            if added_roles or removed_roles:
+                server = await self.db.servers.find_one({"server_id": after.guild.id})
+                if server:
+                    for role in added_roles:
+                        if str(role.id) in server.get("roles", {}):
+                            await self.log_action(
+                                after.guild.id,
+                                f"🎭 {after.mention} received role {role.mention} with cookie benefits",
+                                discord.Color.green()
+                            )
+                    for role in removed_roles:
+                        if str(role.id) in server.get("roles", {}):
+                            await self.log_action(
+                                after.guild.id,
+                                f"🎭 {after.mention} lost role {role.mention} with cookie benefits",
+                                discord.Color.orange()
+                            )
+    
+    @commands.hybrid_command(name="refresh", description="Refresh your role benefits")
+    async def refresh(self, ctx):
+        """Force refresh role benefits for a user"""
+        try:
+            # Clear user's cache
+            self.clear_user_cache(ctx.author.id)
+            
+            embed = discord.Embed(
+                title="🔄 Benefits Refreshed!",
+                description="Your role benefits have been refreshed.",
+                color=discord.Color.green()
+            )
+            
+            # Get fresh server data
+            server = await self.db.servers.find_one({"server_id": ctx.guild.id})
+            if server and server.get("role_based"):
+                role_benefits = []
+                for role in ctx.author.roles:
+                    role_config = server["roles"].get(str(role.id))
+                    if role_config:
+                        role_benefits.append(f"• **{role.name}**: {role_config['cooldown']}h cooldown, {role_config['cost']} cost")
+                
+                if role_benefits:
+                    embed.add_field(
+                        name="🎭 Your Active Benefits",
+                        value="\n".join(role_benefits[:5]),
+                        inline=False
+                    )
+                else:
+                    embed.add_field(
+                        name="ℹ️ No Role Benefits",
+                        value="You don't have any roles with cookie benefits.",
+                        inline=False
+                    )
+            else:
+                embed.add_field(
+                    name="ℹ️ Role System",
+                    value="Role-based benefits are not enabled in this server.",
+                    inline=False
+                )
+            
+            await ctx.send(embed=embed, ephemeral=True)
+            
+        except Exception as e:
+            await ctx.send("❌ Error refreshing benefits!", ephemeral=True)
         if message.author.bot:
             return
             
