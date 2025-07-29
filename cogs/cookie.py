@@ -425,12 +425,68 @@ class CookieCog(commands.Cog):
         self.role_cache.clear()
         self.access_cache.clear()
     
-    @tasks.loop(hours=24)
+    @tasks.loop(time=datetime.time(hour=0, minute=0, tzinfo=timezone.utc))
     async def reset_daily_claims(self):
         """Reset daily claims at midnight UTC"""
-        # This runs every 24 hours but we'll check claims individually
-        # when users try to claim to handle timezone differences
-        pass
+        try:
+            print("🔄 Resetting daily cookie claims...")
+            
+            # Get the current UTC date
+            now = datetime.now(timezone.utc)
+            reset_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            
+            # Count users that need reset
+            users_to_reset = await self.db.users.count_documents({
+                "daily_claims": {"$exists": True, "$ne": {}}
+            })
+            
+            if users_to_reset > 0:
+                # Reset all users' daily claims
+                result = await self.db.users.update_many(
+                    {"daily_claims": {"$exists": True, "$ne": {}}},
+                    {
+                        "$set": {"daily_claims": {}},
+                        "$push": {
+                            "claim_history": {
+                                "date": reset_date,
+                                "action": "daily_reset",
+                                "timestamp": now
+                            }
+                        }
+                    }
+                )
+                
+                print(f"✅ Reset daily claims for {result.modified_count} users")
+                
+                # Log the reset to the analytics collection
+                await self.db.analytics.insert_one({
+                    "type": "daily_reset",
+                    "timestamp": now,
+                    "users_reset": result.modified_count,
+                    "reset_date": reset_date
+                })
+                
+                # Send notification to main log channel if configured
+                config = await self.db.config.find_one({"_id": "bot_config"})
+                if config and config.get("main_log_channel"):
+                    channel = self.bot.get_channel(config["main_log_channel"])
+                    if channel:
+                        embed = discord.Embed(
+                            title="🔄 Daily Claims Reset",
+                            description=f"Reset daily cookie claims for **{result.modified_count}** users",
+                            color=discord.Color.blue(),
+                            timestamp=now
+                        )
+                        embed.add_field(name="Reset Time", value=f"<t:{int(now.timestamp())}:F>", inline=True)
+                        embed.add_field(name="Next Reset", value=f"<t:{int((now + timedelta(days=1)).timestamp())}:R>", inline=True)
+                        await channel.send(embed=embed)
+            else:
+                print("✅ No users needed daily claim reset")
+                
+        except Exception as e:
+            print(f"❌ Error in daily claims reset: {e}")
+            import traceback
+            traceback.print_exc()
     
     @clear_role_cache.before_loop
     async def before_clear_role_cache(self):
@@ -439,6 +495,16 @@ class CookieCog(commands.Cog):
     @reset_daily_claims.before_loop
     async def before_reset_daily_claims(self):
         await self.bot.wait_until_ready()
+        
+        # Calculate time until next midnight UTC
+        now = datetime.now(timezone.utc)
+        next_midnight = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        seconds_until_midnight = (next_midnight - now).total_seconds()
+        
+        print(f"⏰ Daily reset task will start in {seconds_until_midnight/3600:.2f} hours (at midnight UTC)")
+        
+        # Wait until midnight to start the loop
+        await asyncio.sleep(seconds_until_midnight)
     
     async def cookie_autocomplete(self, interaction: discord.Interaction, current: str) -> List[app_commands.Choice[str]]:
         server = await self.db.servers.find_one({"server_id": interaction.guild_id})

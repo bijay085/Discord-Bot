@@ -14,6 +14,24 @@ class EventHandler:
     def __init__(self, bot):
         self.bot = bot
         
+    def get_uptime(self):
+        delta = datetime.now(timezone.utc) - self.bot.start_time
+        hours, remainder = divmod(int(delta.total_seconds()), 3600)
+        minutes, seconds = divmod(remainder, 60)
+        days, hours = divmod(hours, 24)
+        
+        parts = []
+        if days:
+            parts.append(f"{days}d")
+        if hours:
+            parts.append(f"{hours}h")
+        if minutes:
+            parts.append(f"{minutes}m")
+        if seconds or not parts:
+            parts.append(f"{seconds}s")
+            
+        return " ".join(parts)
+        
     async def on_ready(self):
         print(f"✅ Logged in as {self.bot.user} (ID: {self.bot.user.id})")
         print(f"📊 {len(self.bot.guilds)} servers | {sum(g.member_count for g in self.bot.guilds):,} users")
@@ -153,7 +171,7 @@ class EventHandler:
                                   f"Latency  : {round(self.bot.latency * 1000)}ms\n"
                                   f"RAM      : {psutil.virtual_memory().percent}%\n"
                                   f"CPU      : {psutil.cpu_percent()}%\n"
-                                  f"Uptime   : {self.bot.get_uptime()}\n"
+                                  f"Uptime   : {self.get_uptime()}\n"
                                   f"Commands : {len(self.bot.commands)}\n"
                                   f"```",
                             inline=True

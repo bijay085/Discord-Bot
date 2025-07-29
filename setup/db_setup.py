@@ -1,6 +1,6 @@
-# setup/enhanced_db_setup.py
-# Location: setup/enhanced_db_setup.py
-# Description: Enhanced database setup with absolute path handling
+# setup/db_setup.py
+# Location: setup/db_setup.py
+# Description: Database setup with absolute path handling
 
 import asyncio
 import motor.motor_asyncio
@@ -11,7 +11,7 @@ from pathlib import Path
 
 load_dotenv('setup/.env')
 
-class EnhancedDatabaseSetup:
+class DatabaseSetup:
     def __init__(self):
         self.MONGODB_URI = os.getenv("MONGODB_URI")
         self.DATABASE_NAME = os.getenv("DATABASE_NAME", "discord_bot")
@@ -45,14 +45,14 @@ class EnhancedDatabaseSetup:
             else:
                 print(f"✓ Collection exists: {collection}")
         
-        await self.create_enhanced_indexes()
+        await self.create_indexes()
         await self.initialize_bot_config()
         await self.initialize_statistics()
         await self.initialize_analytics()
         await self.setup_cookie_tracking()
         await self.initialize_game_config()
         
-    async def create_enhanced_indexes(self):
+    async def create_indexes(self):
         print("\n📑 Creating optimized indexes...")
         
         indexes = {
@@ -283,15 +283,15 @@ class EnhancedDatabaseSetup:
                         "cooldown_days": 7,
                         "requirements": {
                             "invites": 5,
-                            "trust_score": 60,
-                            "points": 20
+                            "trust_score": 15,
+                            "points": 10
                         },
                         "entry_cost": {
                             "trust": 15,
                             "points": 10
                         },
                         "rewards": {
-                            "trust_return": 45,
+                            "trust_multiplier": 3,
                             "points_return": 130,
                             "curse_duration_hours": 24,
                             "blessing_duration_days": 7
@@ -433,6 +433,7 @@ class EnhancedDatabaseSetup:
                 "emoji": "🆓",
                 "daily_bonus": 0,
                 "trust_multiplier": 1.0,
+                "invite_bonus": 0,
                 "game_benefits": {
                     "slots_max_bet_bonus": 0,
                     "rob_success_bonus": 0,
@@ -473,6 +474,7 @@ class EnhancedDatabaseSetup:
                 "emoji": "⭐",
                 "daily_bonus": 5,
                 "trust_multiplier": 1.5,
+                "invite_bonus": 2,
                 "game_benefits": {
                     "slots_max_bet_bonus": 50,
                     "rob_success_bonus": 5,
@@ -544,6 +546,7 @@ class EnhancedDatabaseSetup:
                 "emoji": "💎",
                 "daily_bonus": 10,
                 "trust_multiplier": 2.0,
+                "invite_bonus": 5,
                 "game_benefits": {
                     "slots_max_bet_bonus": 100,
                     "rob_success_bonus": 10,
@@ -618,6 +621,7 @@ class EnhancedDatabaseSetup:
                 "emoji": "🎯",
                 "daily_bonus": 20,
                 "trust_multiplier": 2.5,
+                "invite_bonus": 10,
                 "game_benefits": {
                     "slots_max_bet_bonus": 200,
                     "rob_success_bonus": 15,
@@ -692,6 +696,7 @@ class EnhancedDatabaseSetup:
                 "emoji": "🚀",
                 "daily_bonus": 20,
                 "trust_multiplier": 3.0,
+                "invite_bonus": 15,
                 "game_benefits": {
                     "slots_max_bet_bonus": 300,
                     "rob_success_bonus": 20,
@@ -767,6 +772,7 @@ class EnhancedDatabaseSetup:
                 "emoji": "🛡️",
                 "daily_bonus": 5,
                 "trust_multiplier": 5.0,
+                "invite_bonus": 0,
                 "game_benefits": {
                     "slots_max_bet_bonus": 500,
                     "rob_success_bonus": 25,
@@ -1270,7 +1276,7 @@ Files will be randomly selected and distributed.
     
     async def run(self):
         try:
-            print("🚀 Enhanced Database Setup Starting...")
+            print("🚀 Database Setup Starting...")
             print("=" * 50)
             
             await self.client.admin.command('ping')
@@ -1282,7 +1288,7 @@ Files will be randomly selected and distributed.
             await self.verify_setup()
             await self.show_summary()
             
-            print("\n✅ Enhanced database setup completed successfully!")
+            print("\n✅ Database setup completed successfully!")
             print("=" * 50)
             
         except Exception as e:
@@ -1294,7 +1300,7 @@ Files will be randomly selected and distributed.
             print("\n🔌 Database connection closed.")
 
 async def main():
-    setup = EnhancedDatabaseSetup()
+    setup = DatabaseSetup()
     await setup.run()
 
 if __name__ == "__main__":
