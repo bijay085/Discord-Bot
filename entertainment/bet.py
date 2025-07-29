@@ -234,6 +234,11 @@ class BetGame:
         
         user_data = await self.cog.get_user_data(interaction.user.id)
         
+        server = await self.cog.db.servers.find_one({"server_id": interaction.guild_id})
+        role_config = await self.cog.get_user_role_config(interaction.user, server) if server else {}
+        
+        bet_profit_multiplier = role_config.get("game_benefits", {}).get("bet_profit_multiplier", 1.0) if role_config else 1.0
+        
         if self.currency == "points":
             if user_data["points"] < amount:
                 await interaction.response.send_message(f"❌ You need {amount} points! You have: {user_data['points']}", ephemeral=True)
@@ -255,12 +260,20 @@ class BetGame:
                 {"$set": {"trust_score": current_trust - amount}}
             )
         
-        self.players[interaction.user.id] = {"user": interaction.user, "bet": amount}
+        self.players[interaction.user.id] = {
+            "user": interaction.user, 
+            "bet": amount,
+            "profit_multiplier": bet_profit_multiplier
+        }
         
         if self.mode == "group":
             self.max_number = 10 + (len(self.players) * 2)
         
-        await interaction.response.send_message(f"✅ Joined with {amount} {self.currency}!", ephemeral=True)
+        response_text = f"✅ Joined with {amount} {self.currency}!"
+        if bet_profit_multiplier > 1.0:
+            response_text += f"\n🎭 Role bonus: {bet_profit_multiplier}x profit multiplier!"
+        
+        await interaction.response.send_message(response_text, ephemeral=True)
         await self.update_embed()
         
         if len(self.players) >= self.max_players:
@@ -376,26 +389,44 @@ class BetGame:
         
         if winner and closest_diff == 0:
             winner_data = self.players[winner]
-            profit = winner_data["bet"] * 0.5
-            total_win = winner_data["bet"] + profit
+            profit_multiplier = winner_data.get("profit_multiplier", 1.0)
+            base_profit = winner_data["bet"] * 0.5
+            actual_profit = base_profit * profit_multiplier
+            total_win = winner_data["bet"] + actual_profit
             
             if self.currency == "points":
                 await self.cog.db.users.update_one(
                     {"user_id": winner},
-                    {"$inc": {"points": int(total_win)}}
+                    {
+                        "$inc": {
+                            "points": int(total_win),
+                            "game_stats.bet.won": 1,
+                            "game_stats.bet.profit": int(actual_profit)
+                        }
+                    }
                 )
             else:
                 user_data = await self.cog.get_user_data(winner)
                 new_trust = user_data.get("trust_score", 50) + total_win
                 await self.cog.db.users.update_one(
                     {"user_id": winner},
-                    {"$set": {"trust_score": min(100, new_trust)}}
+                    {
+                        "$set": {"trust_score": min(100, new_trust)},
+                        "$inc": {
+                            "game_stats.bet.won": 1,
+                            "game_stats.bet.profit": int(actual_profit)
+                        }
+                    }
                 )
+            
+            winner_text = f"{winner_data['user'].mention} guessed correctly!\n"
+            winner_text += f"Bet: {winner_data['bet']} → Won: {int(total_win)} (+{int(actual_profit)})"
+            if profit_multiplier > 1.0:
+                winner_text += f"\n🎭 Role bonus applied: {profit_multiplier}x"
             
             embed.add_field(
                 name="🏆 Winner!",
-                value=f"{winner_data['user'].mention} guessed correctly!\n"
-                      f"Bet: {winner_data['bet']} → Won: {int(total_win)} (+{int(profit)})",
+                value=winner_text,
                 inline=False
             )
             
@@ -457,6 +488,14 @@ class BetGame:
                 name="😢 No Winners",
                 value="Nobody guessed correctly or submitted a guess!",
                 inline=False
+            )
+        
+        for user_id, player_data in self.players.items():
+            if user_id not in self.guesses or (winner and user_id == winner):
+                continue
+            await self.cog.db.users.update_one(
+                {"user_id": user_id},
+                {"$inc": {"game_stats.bet.played": 1}}
             )
         
         if self.guesses:
@@ -535,7 +574,11 @@ class BetGame:
                 
                 for user_id, player_data in self.players.items():
                     percentage = (player_data["bet"] / total_pool * 100) if total_pool > 0 else 0
-                    player_list.append(f"{player_data['user'].mention}: {player_data['bet']} ({percentage:.1f}%)")
+                    multiplier = player_data.get("profit_multiplier", 1.0)
+                    player_text = f"{player_data['user'].mention}: {player_data['bet']} ({percentage:.1f}%)"
+                    if multiplier > 1.0:
+                        player_text += f" 🎭×{multiplier}"
+                    player_list.append(player_text)
                 
                 embed.add_field(
                     name=f"👥 Players ({len(self.players)}/{self.max_players})",
@@ -588,9 +631,28 @@ class BetCog(commands.Cog):
             user = {
                 "user_id": user_id,
                 "points": 0,
-                "trust_score": 50
+                "trust_score": 50,
+                "game_stats": {
+                    "bet": {"played": 0, "won": 0, "profit": 0}
+                }
             }
         return user
+    
+    async def get_user_role_config(self, member: discord.Member, server: dict) -> dict:
+        if not server.get("role_based"):
+            return {}
+            
+        best_config = {}
+        highest_priority = -1
+        
+        for role in member.roles:
+            role_config = server["roles"].get(str(role.id))
+            if role_config and isinstance(role_config, dict):
+                if role.position > highest_priority:
+                    highest_priority = role.position
+                    best_config = role_config
+        
+        return best_config
     
     async def log_action(self, guild_id: int, message: str, color: discord.Color = discord.Color.blue()):
         cookie_cog = self.bot.get_cog("CookieCog")
@@ -654,6 +716,9 @@ class BetCog(commands.Cog):
         game = BetGame(self, ctx.author, mode, currency, amount)
         game.channel = ctx.channel
         
+        server = await self.db.servers.find_one({"server_id": ctx.guild.id})
+        role_config = await self.get_user_role_config(ctx.author, server) if server else {}
+        
         if mode == "solo":
             embed = discord.Embed(
                 title="🎲 Solo Bet Started!",
@@ -663,6 +728,14 @@ class BetCog(commands.Cog):
             embed.add_field(name="🎯 Range", value="1-10", inline=True)
             embed.add_field(name="💰 Win", value=f"+{int(amount * 0.5)} profit", inline=True)
             embed.add_field(name="😅 Close Guess", value="15% back", inline=True)
+            
+            if role_config and role_config.get("game_benefits", {}).get("bet_profit_multiplier", 1.0) > 1.0:
+                multiplier = role_config["game_benefits"]["bet_profit_multiplier"]
+                embed.add_field(
+                    name="🎭 Role Bonus",
+                    value=f"×{multiplier} profit multiplier",
+                    inline=False
+                )
         else:
             embed = discord.Embed(
                 title="🎰 Group Bet Created!",
@@ -672,6 +745,14 @@ class BetCog(commands.Cog):
             embed.add_field(name="👥 Players", value="0/50", inline=True)
             embed.add_field(name="⏰ Timer", value="60s", inline=True)
             embed.add_field(name="💰 Profit", value="50% on win", inline=True)
+            
+            if role_config and role_config.get("game_benefits", {}).get("bet_profit_multiplier", 1.0) > 1.0:
+                multiplier = role_config["game_benefits"]["bet_profit_multiplier"]
+                embed.add_field(
+                    name="🎭 Your Role Bonus",
+                    value=f"×{multiplier} profit multiplier",
+                    inline=False
+                )
         
         embed.set_footer(text="Click buttons below to interact!")
         
@@ -682,6 +763,11 @@ class BetCog(commands.Cog):
         game.message = message
         
         self.active_games[ctx.channel.id] = game
+        
+        await self.db.users.update_one(
+            {"user_id": ctx.author.id},
+            {"$inc": {"game_stats.bet.played": 1}}
+        )
         
         if mode == "group":
             game.timer_task = self.bot.loop.create_task(self._run_join_timer(game))
