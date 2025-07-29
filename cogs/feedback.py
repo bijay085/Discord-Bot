@@ -1,7 +1,3 @@
-# cogs/feedback.py
-# Location: cogs/feedback.py
-# Description: Updated feedback system with role-based benefits and new DB structure
-
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands
@@ -62,7 +58,6 @@ class FeedbackCog(commands.Cog):
             await cookie_cog.log_action(guild_id, message, color)
     
     async def get_user_role_config(self, member: discord.Member, server: dict) -> dict:
-        """Get the best role configuration for a user based on role hierarchy"""
         if not server.get("role_based"):
             return {}
             
@@ -221,9 +216,24 @@ class FeedbackCog(commands.Cog):
             
             await interaction.response.send_message(embed=embed, ephemeral=True)
             
+        except discord.NotFound:
+            print(f"Interaction expired for user {interaction.user.id}")
+            try:
+                await interaction.user.send(
+                    "⚠️ Your feedback submission took too long to process. "
+                    "Please try again using the `/feedback` command!"
+                )
+            except:
+                pass
         except Exception as e:
-            print(f"Error in process_feedback_submission: {e}")
-            await interaction.response.send_message("❌ Error submitting feedback!", ephemeral=True)
+            print(f"Error in process_feedback_submission: {traceback.format_exc()}")
+            try:
+                if not interaction.response.is_done():
+                    await interaction.response.send_message("❌ Error submitting feedback!", ephemeral=True)
+                else:
+                    await interaction.followup.send("❌ Error submitting feedback!", ephemeral=True)
+            except:
+                pass
     
     @tasks.loop(minutes=1)
     async def check_feedback_deadlines(self):

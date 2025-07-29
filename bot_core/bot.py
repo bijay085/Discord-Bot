@@ -82,14 +82,15 @@ class CookieBot(commands.Bot):
         try:
             self.mongo_client = motor.motor_asyncio.AsyncIOMotorClient(
                 MONGODB_URI,
-                maxPoolSize=50,
-                minPoolSize=10,
+                maxPoolSize=40,
+                minPoolSize=7,
                 maxIdleTimeMS=45000,
                 waitQueueTimeoutMS=10000,
                 serverSelectionTimeoutMS=5000,
                 connectTimeoutMS=10000,
                 retryWrites=True,
-                w='majority'
+                w='majority',
+                readPreference='nearest'
             )
             
             self.db = self.mongo_client[DATABASE_NAME]
