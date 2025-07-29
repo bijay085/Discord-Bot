@@ -36,6 +36,9 @@ class FeedbackModal(discord.ui.Modal):
                 await interaction.response.send_message("❌ Rating must be between 1-5!", ephemeral=True)
                 return
                 
+            # Defer the response immediately to avoid timeout
+            await interaction.response.defer(ephemeral=True)
+            
             cog = interaction.client.get_cog("FeedbackCog")
             if cog:
                 await cog.process_feedback_submission(interaction, rating, self.feedback.value, self.cookie_type)
@@ -79,23 +82,25 @@ class FeedbackCog(commands.Cog):
     
     async def process_feedback_submission(self, interaction: discord.Interaction, rating: int, feedback: str, cookie_type: str = None):
         try:
+            # The interaction is already deferred, so we can take our time with database operations
+            
             user_data = await self.db.users.find_one({"user_id": interaction.user.id})
             if not user_data or not user_data.get("last_claim"):
-                await interaction.response.send_message("❌ No recent cookie claim found!", ephemeral=True)
+                await interaction.followup.send("❌ No recent cookie claim found!", ephemeral=True)
                 return
             
             last_claim = user_data["last_claim"]
             
             if last_claim.get("feedback_given") and last_claim.get("rating"):
-                await interaction.response.send_message("✅ You already submitted complete feedback!", ephemeral=True)
+                await interaction.followup.send("✅ You already submitted complete feedback!", ephemeral=True)
                 return
             
             if last_claim.get("rating"):
-                await interaction.response.send_message("✅ You already submitted text feedback! Post a screenshot for bonus points.", ephemeral=True)
+                await interaction.followup.send("✅ You already submitted text feedback! Post a screenshot for bonus points.", ephemeral=True)
                 return
             
             if cookie_type and last_claim.get("type") != cookie_type:
-                await interaction.response.send_message("❌ This feedback doesn't match your last claim!", ephemeral=True)
+                await interaction.followup.send("❌ This feedback doesn't match your last claim!", ephemeral=True)
                 return
             
             current_streak = user_data.get("statistics", {}).get("feedback_streak", 0)
@@ -214,7 +219,7 @@ class FeedbackCog(commands.Cog):
                     inline=False
                 )
             
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=embed, ephemeral=True)
             
         except discord.NotFound:
             print(f"Interaction expired for user {interaction.user.id}")
@@ -228,10 +233,7 @@ class FeedbackCog(commands.Cog):
         except Exception as e:
             print(f"Error in process_feedback_submission: {traceback.format_exc()}")
             try:
-                if not interaction.response.is_done():
-                    await interaction.response.send_message("❌ Error submitting feedback!", ephemeral=True)
-                else:
-                    await interaction.followup.send("❌ Error submitting feedback!", ephemeral=True)
+                await interaction.followup.send("❌ Error submitting feedback!", ephemeral=True)
             except:
                 pass
     
@@ -311,6 +313,10 @@ class FeedbackCog(commands.Cog):
     @commands.hybrid_command(name="feedback", description="Submit feedback with interactive form")
     async def feedback(self, ctx):
         try:
+            # Defer the response immediately if it's an interaction
+            if hasattr(ctx, 'interaction') and ctx.interaction:
+                await ctx.interaction.response.defer(ephemeral=True)
+            
             server = await self.db.servers.find_one({"server_id": ctx.guild.id})
             if not server:
                 await ctx.send("❌ Server not configured!", ephemeral=True)
@@ -360,47 +366,44 @@ class FeedbackCog(commands.Cog):
                 await ctx.send(embed=embed, ephemeral=True)
                 return
             
-            modal = FeedbackModal(last_claim["type"])
+            embed = discord.Embed(
+                title="📸 Submit Feedback",
+                description=f"Click the button below to submit feedback for your **{last_claim['type']}** cookie!",
+                color=discord.Color.blue()
+            )
+            embed.add_field(
+                name="⏰ Deadline",
+                value=f"<t:{int(deadline.timestamp())}:R>",
+                inline=False
+            )
             
-            if hasattr(ctx, 'interaction') and ctx.interaction:
-                await ctx.interaction.response.send_modal(modal)
-            else:
-                embed = discord.Embed(
-                    title="📸 Submit Feedback",
-                    description=f"Click the button below to submit feedback for your **{last_claim['type']}** cookie!",
-                    color=discord.Color.blue()
-                )
+            role_config = await self.get_user_role_config(ctx.author, server)
+            if role_config and role_config.get("trust_multiplier", 1.0) > 1.0:
                 embed.add_field(
-                    name="⏰ Deadline",
-                    value=f"<t:{int(deadline.timestamp())}:R>",
+                    name="🎭 Role Benefit",
+                    value=f"Your {role_config.get('name', 'role')} gives ×{role_config['trust_multiplier']} trust bonus!",
                     inline=False
                 )
-                
-                role_config = await self.get_user_role_config(ctx.author, server)
-                if role_config and role_config.get("trust_multiplier", 1.0) > 1.0:
-                    embed.add_field(
-                        name="🎭 Role Benefit",
-                        value=f"Your {role_config.get('name', 'role')} gives ×{role_config['trust_multiplier']} trust bonus!",
-                        inline=False
-                    )
-                
-                button = discord.ui.Button(
-                    label="Submit Feedback",
-                    style=discord.ButtonStyle.success,
-                    emoji="📸"
-                )
-                
-                async def button_callback(interaction: discord.Interaction):
-                    if interaction.user.id != ctx.author.id:
-                        await interaction.response.send_message("This isn't for you!", ephemeral=True)
-                        return
-                    await interaction.response.send_modal(modal)
-                
-                button.callback = button_callback
-                view = discord.ui.View()
-                view.add_item(button)
-                
-                await ctx.send(embed=embed, view=view, ephemeral=True)
+            
+            button = discord.ui.Button(
+                label="Submit Feedback",
+                style=discord.ButtonStyle.success,
+                emoji="📸"
+            )
+            
+            modal = FeedbackModal(last_claim["type"])
+            
+            async def button_callback(interaction: discord.Interaction):
+                if interaction.user.id != ctx.author.id:
+                    await interaction.response.send_message("This isn't for you!", ephemeral=True)
+                    return
+                await interaction.response.send_modal(modal)
+            
+            button.callback = button_callback
+            view = discord.ui.View()
+            view.add_item(button)
+            
+            await ctx.send(embed=embed, view=view, ephemeral=True)
                 
         except Exception as e:
             print(f"Error in feedback command: {e}")
@@ -525,6 +528,10 @@ class FeedbackCog(commands.Cog):
                 pass
             except Exception as e:
                 print(f"Error processing feedback attachment: {e}")
+
+    @check_feedback_deadlines.before_loop
+    async def before_check_feedback_deadlines(self):
+        await self.bot.wait_until_ready()
 
 async def setup(bot):
     await bot.add_cog(FeedbackCog(bot))
