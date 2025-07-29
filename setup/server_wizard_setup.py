@@ -41,7 +41,8 @@ class SetupWizardView(discord.ui.View):
             "channels": {},
             "roles": {},
             "cookies": {},
-            "settings": {}
+            "settings": {},
+            "games": {}
         }
         
     @discord.ui.button(label="Start Setup", style=discord.ButtonStyle.primary, emoji="🚀")
@@ -59,6 +60,7 @@ class SetupWizardView(discord.ui.View):
             self.setup_channels,
             self.setup_roles,
             self.configure_cookies,
+            self.configure_games,
             self.configure_settings,
             self.finalize_setup
         ]
@@ -84,6 +86,7 @@ class SetupWizardView(discord.ui.View):
                 "• 📸 feedback-photos\n"
                 "• 📝 bot-logs\n"
                 "• 📢 announcements\n"
+                "• 🎮 games-room\n"
                 "• 📊 analytics"
             ),
             inline=False
@@ -102,7 +105,7 @@ class SetupWizardView(discord.ui.View):
     async def setup_roles(self):
         embed = discord.Embed(
             title="🎭 Step 2: Role Setup",
-            description="Select roles to create for different benefits.",
+            description="Configure roles with specific cookie access and benefits.",
             color=0x5865f2
         )
         
@@ -117,16 +120,22 @@ class SetupWizardView(discord.ui.View):
     async def configure_cookies(self):
         embed = discord.Embed(
             title="🍪 Step 3: Cookie Configuration",
-            description="Setting up cookie types with default configuration.",
+            description="Setting up cookie types with role-based access.",
             color=0x5865f2
         )
         
         config = await bot.db.config.find_one({"_id": "bot_config"})
         if config and "default_cookies" in config:
             self.setup_data["cookies"] = config["default_cookies"]
+            
+            cookies_list = "\n".join([
+                f"• **{cookie.title()}** - {cfg['description']}" 
+                for cookie, cfg in config["default_cookies"].items()
+            ])
+            
             embed.add_field(
                 name="✅ Cookies Configured",
-                value=f"Set up {len(config['default_cookies'])} cookie types",
+                value=cookies_list[:1024],
                 inline=False
             )
         else:
@@ -137,7 +146,44 @@ class SetupWizardView(discord.ui.View):
             )
             
         await self.ctx.send(embed=embed)
-        await asyncio.sleep(2)
+        await asyncio.sleep(3)
+        return True
+    
+    async def configure_games(self):
+        embed = discord.Embed(
+            title="🎮 Step 4: Games Configuration",
+            description="Enable entertainment features for your server.",
+            color=0x5865f2
+        )
+        
+        games_config = {
+            "enabled": True,
+            "channel_required": True,
+            "games_config": {
+                "slots": {"enabled": True, "custom_settings": {}},
+                "bet": {"enabled": True, "custom_settings": {}},
+                "rob": {"enabled": True, "custom_settings": {}},
+                "gamble": {"enabled": True, "custom_settings": {}},
+                "giveaway": {"enabled": True, "custom_settings": {}}
+            }
+        }
+        
+        self.setup_data["games"] = games_config
+        
+        embed.add_field(
+            name="🎰 Available Games",
+            value=(
+                "• **Slots** - Classic slot machine\n"
+                "• **Bet** - Number guessing game\n"
+                "• **Rob** - Steal points from others\n"
+                "• **Divine Gamble** - Ultimate risk/reward\n"
+                "• **Giveaway** - Points giveaways"
+            ),
+            inline=False
+        )
+        
+        await self.ctx.send(embed=embed)
+        await asyncio.sleep(3)
         return True
     
     async def configure_settings(self):
@@ -147,12 +193,14 @@ class SetupWizardView(discord.ui.View):
             "max_daily_claims": 10,
             "blacklist_after_warnings": 3,
             "invite_tracking": True,
-            "analytics_enabled": True
+            "analytics_enabled": True,
+            "role_hierarchy_enabled": True,
+            "daily_claim_tracking": True
         }
         
         embed = discord.Embed(
-            title="⚙️ Step 4: Bot Settings",
-            description="Configured default settings:",
+            title="⚙️ Step 5: Bot Settings",
+            description="Configured settings:",
             color=0x5865f2
         )
         
@@ -183,11 +231,13 @@ class SetupWizardView(discord.ui.View):
             "cookies": self.setup_data["cookies"],
             "role_based": True,
             "roles": self.setup_data["roles"],
+            "games": self.setup_data["games"],
             "enabled": True,
             "setup_complete": True,
             "settings": self.setup_data["settings"],
             "premium_tier": "basic",
-            "created_at": datetime.now(timezone.utc)
+            "created_at": datetime.now(timezone.utc),
+            "last_updated": datetime.now(timezone.utc)
         }
         
         await bot.db.servers.update_one(
@@ -281,6 +331,12 @@ class ChannelSetupView(discord.ui.View):
                 "announcement": True
             },
             {
+                "name": "🎮games-room",
+                "topic": "Play games like slots, betting, and more!",
+                "type": "games",
+                "slowmode": 3
+            },
+            {
                 "name": "📊analytics",
                 "topic": "Server statistics and performance metrics",
                 "type": "analytics",
@@ -372,16 +428,24 @@ class RoleSetupView(discord.ui.View):
         self.roles_created = {}
         
     @discord.ui.select(
-        placeholder="Select roles to create...",
+        placeholder="Select roles to create/configure...",
         min_values=1,
-        max_values=6,
+        max_values=7,
         options=[
-            discord.SelectOption(label="Free Cookie", value="free", emoji="🍪"),
-            discord.SelectOption(label="Premium Cookie", value="premium", emoji="⭐"),
-            discord.SelectOption(label="VIP Cookie", value="vip", emoji="💎"),
-            discord.SelectOption(label="Elite Cookie", value="elite", emoji="🎯"),
-            discord.SelectOption(label="Staff Cookie", value="staff", emoji="🛡️"),
-            discord.SelectOption(label="Cookie Blacklist", value="blacklist", emoji="🚫")
+            discord.SelectOption(label="Free Cookie", value="free", emoji="🆓", 
+                               description="Basic access with limited cookies"),
+            discord.SelectOption(label="Premium Cookie", value="premium", emoji="⭐", 
+                               description="Enhanced access with reduced costs"),
+            discord.SelectOption(label="VIP Cookie", value="vip", emoji="💎", 
+                               description="VIP access with major discounts"),
+            discord.SelectOption(label="Elite Cookie", value="elite", emoji="🎯", 
+                               description="Elite access with minimal costs"),
+            discord.SelectOption(label="Staff Cookie", value="staff", emoji="🛡️", 
+                               description="Staff members special privileges"),
+            discord.SelectOption(label="Booster Role", value="booster", emoji="🚀", 
+                               description="Configure server booster benefits"),
+            discord.SelectOption(label="Cookie Blacklist", value="blacklist", emoji="🚫", 
+                               description="Blacklisted users role")
         ]
     )
     async def select_roles(self, interaction: discord.Interaction, select: discord.ui.Select):
@@ -393,7 +457,7 @@ class RoleSetupView(discord.ui.View):
         
         guild = self.ctx.guild
         role_configs = {
-            "free": ("🍪 Free Cookie", discord.Color.default()),
+            "free": ("🆓 Free Cookie", discord.Color.default()),
             "premium": ("⭐ Premium Cookie", discord.Color.gold()),
             "vip": ("💎 VIP Cookie", discord.Color.purple()),
             "elite": ("🎯 Elite Cookie", discord.Color.dark_blue()),
@@ -402,13 +466,24 @@ class RoleSetupView(discord.ui.View):
         }
         
         embed = discord.Embed(
-            title="Creating Roles...",
+            title="Creating/Configuring Roles...",
             color=0x5865f2
         )
         
         default_roles = self.bot_config.get("default_roles", {})
         
         for value in select.values:
+            if value == "booster":
+                if guild.premium_subscriber_role:
+                    booster_config = default_roles.get("booster", {})
+                    self.roles_created[str(guild.premium_subscriber_role.id)] = booster_config
+                    embed.add_field(
+                        name="🚀 Server Booster",
+                        value="✅ Configured with perks",
+                        inline=True
+                    )
+                continue
+                
             role_name, color = role_configs[value]
             role = discord.utils.get(guild.roles, name=role_name)
             
@@ -433,28 +508,7 @@ class RoleSetupView(discord.ui.View):
             
             if value != "blacklist":
                 default_config = default_roles.get(value, {})
-                self.roles_created[str(role.id)] = {
-                    "name": value,
-                    "cooldown": default_config.get("cooldown", 72),
-                    "cost": default_config.get("cost", "default"),
-                    "access": default_config.get("access", ["all"]),
-                    "daily_bonus": default_config.get("daily_bonus", 0)
-                }
-        
-        if guild.premium_subscriber_role:
-            booster_config = default_roles.get("booster", {})
-            self.roles_created[str(guild.premium_subscriber_role.id)] = {
-                "name": "booster",
-                "cooldown": booster_config.get("cooldown", 0),
-                "cost": booster_config.get("cost", 0),
-                "access": booster_config.get("access", ["all"]),
-                "daily_bonus": booster_config.get("daily_bonus", 50)
-            }
-            embed.add_field(
-                name="🚀 Server Booster",
-                value="✅ Configured",
-                inline=True
-            )
+                self.roles_created[str(role.id)] = default_config
         
         await interaction.followup.edit_message(
             message_id=interaction.message.id,
@@ -487,10 +541,17 @@ async def setup_wizard(ctx):
         title="🍪 Cookie Bot Setup Wizard",
         description=(
             "Welcome to the Cookie Bot setup wizard!\n\n"
+            "**Features:**\n"
+            "• Dynamic role-based cookie access\n"
+            "• Game configurations\n"
+            "• Daily claim limits per cookie\n"
+            "• Trust multipliers by role\n"
+            "• Enhanced analytics\n\n"
             "This wizard will guide you through:\n"
             "• Creating necessary channels\n"
-            "• Setting up roles with benefits\n"
+            "• Setting up roles with specific benefits\n"
             "• Configuring cookie types\n"
+            "• Enabling games\n"
             "• Customizing bot settings\n\n"
             "Click **Start Setup** to begin!"
         ),
@@ -501,17 +562,17 @@ async def setup_wizard(ctx):
     if existing:
         embed.add_field(
             name="⚠️ Existing Setup Detected",
-            value="Running setup again will update your configuration.",
+            value="Running setup will update to the latest configuration.",
             inline=False
         )
     
     embed.set_thumbnail(url=bot.user.display_avatar.url)
-    embed.set_footer(text="Setup Wizard v2.0")
+    embed.set_footer(text="Setup Wizard v2.1")
     
     view = SetupWizardView(ctx)
     await ctx.send(embed=embed, view=view)
 
-@bot.hybrid_command(name="quicksetup", description="Quick setup with default settings")
+@bot.hybrid_command(name="quicksetup", description="Quick setup with defaults")
 @commands.has_permissions(administrator=True)
 async def quick_setup(ctx):
     await ctx.defer()
@@ -525,7 +586,7 @@ async def quick_setup(ctx):
     
     config = bot.config or await bot.db.config.find_one({"_id": "bot_config"})
     if not config:
-        await ctx.send("❌ Bot configuration not found! Contact support.")
+        await ctx.send("❌ Bot configuration not found! Run db_setup.py first.")
         return
     
     category = await create_category(guild)
@@ -540,6 +601,17 @@ async def quick_setup(ctx):
         "cookies": config["default_cookies"],
         "role_based": True,
         "roles": roles,
+        "games": {
+            "enabled": True,
+            "channel_required": True,
+            "games_config": {
+                "slots": {"enabled": True, "custom_settings": {}},
+                "bet": {"enabled": True, "custom_settings": {}},
+                "rob": {"enabled": True, "custom_settings": {}},
+                "gamble": {"enabled": True, "custom_settings": {}},
+                "giveaway": {"enabled": True, "custom_settings": {}}
+            }
+        },
         "enabled": True,
         "setup_complete": True,
         "settings": {
@@ -548,10 +620,13 @@ async def quick_setup(ctx):
             "max_daily_claims": 10,
             "blacklist_after_warnings": 3,
             "invite_tracking": True,
-            "analytics_enabled": True
+            "analytics_enabled": True,
+            "role_hierarchy_enabled": True,
+            "daily_claim_tracking": True
         },
         "premium_tier": "basic",
-        "created_at": datetime.now(timezone.utc)
+        "created_at": datetime.now(timezone.utc),
+        "last_updated": datetime.now(timezone.utc)
     }
     
     await bot.db.servers.update_one(
@@ -562,7 +637,7 @@ async def quick_setup(ctx):
     
     final_embed = discord.Embed(
         title="✅ Quick Setup Complete!",
-        description="Your server is now ready to use Cookie Bot!",
+        description="Your server is now ready with all features!",
         color=0x00ff00,
         timestamp=datetime.now(timezone.utc)
     )
@@ -582,14 +657,32 @@ async def quick_setup(ctx):
         value=f"{len(config['default_cookies'])} types available",
         inline=True
     )
+    final_embed.add_field(
+        name="🎮 Games",
+        value="All games enabled",
+        inline=True
+    )
+    
+    final_embed.add_field(
+        name="✨ Features",
+        value=(
+            "• Role-specific cookie access\n"
+            "• Daily claim limits per role\n"
+            "• Trust score multipliers\n"
+            "• Game bonuses by role\n"
+            "• Enhanced analytics"
+        ),
+        inline=False
+    )
     
     final_embed.add_field(
         name="📋 Next Steps",
         value=(
             "1. Add cookie files to your directories\n"
-            "2. Customize settings with `/config`\n"
+            "2. Configure role benefits with `/roleconfig`\n"
             "3. Check `/help` for all commands\n"
-            "4. Join our support server for help!"
+            "4. Test games in the games channel\n"
+            "5. Join our support server for help!"
         ),
         inline=False
     )
@@ -601,6 +694,12 @@ async def quick_setup(ctx):
         cookie_channel = bot.get_channel(cookie_channel_id)
         if cookie_channel:
             await send_welcome_message(cookie_channel)
+            
+    games_channel_id = channels.get("games")
+    if games_channel_id:
+        games_channel = bot.get_channel(games_channel_id)
+        if games_channel:
+            await send_games_welcome_message(games_channel)
 
 async def create_category(guild):
     category_name = "🍪 Cookie Bot"
@@ -635,6 +734,7 @@ async def create_channels(guild, category):
         ("📸feedback-photos", "feedback", False),
         ("📝bot-logs", "log", True),
         ("📢announcements", "announcement", False),
+        ("🎮games-room", "games", False),
         ("📊analytics", "analytics", True)
     ]
     
@@ -656,7 +756,8 @@ async def create_channels(guild, category):
             
             channel = await category.create_text_channel(
                 name,
-                overwrites=overwrites
+                overwrites=overwrites,
+                slowmode_delay=3 if ch_type == "games" else 0
             )
         
         channels_created[ch_type] = channel.id
@@ -665,11 +766,13 @@ async def create_channels(guild, category):
 
 async def create_roles(guild, config):
     roles_created = {}
+    default_roles = config.get("default_roles", {})
     
     role_configs = [
-        ("🍪 Free Cookie", discord.Color.default(), "free"),
+        ("🆓 Free Cookie", discord.Color.default(), "free"),
         ("⭐ Premium Cookie", discord.Color.gold(), "premium"),
         ("💎 VIP Cookie", discord.Color.purple(), "vip"),
+        ("🎯 Elite Cookie", discord.Color.dark_blue(), "elite"),
         ("🛡️ Staff Cookie", discord.Color.red(), "staff")
     ]
     
@@ -684,24 +787,10 @@ async def create_roles(guild, config):
                 hoist=role_type != "free"
             )
         
-        default_config = config["default_roles"].get(role_type, {})
-        roles_created[str(role.id)] = {
-            "name": role_type,
-            "cooldown": default_config.get("cooldown", 72),
-            "cost": default_config.get("cost", "default"),
-            "access": default_config.get("access", ["all"]),
-            "daily_bonus": default_config.get("daily_bonus", 0)
-        }
+        roles_created[str(role.id)] = default_roles.get(role_type, {})
     
     if guild.premium_subscriber_role:
-        booster_config = config["default_roles"].get("booster", {})
-        roles_created[str(guild.premium_subscriber_role.id)] = {
-            "name": "booster",
-            "cooldown": booster_config.get("cooldown", 0),
-            "cost": booster_config.get("cost", 0),
-            "access": booster_config.get("access", ["all"]),
-            "daily_bonus": booster_config.get("daily_bonus", 50)
-        }
+        roles_created[str(guild.premium_subscriber_role.id)] = default_roles.get("booster", {})
     
     return roles_created
 
@@ -710,7 +799,13 @@ async def send_welcome_message(channel):
         title="🍪 Welcome to Cookie Bot Premium!",
         description=(
             "Your premium cookie distribution system is ready!\n\n"
-            "**🚀 Getting Started:**"
+            "**🚀 Features:**\n"
+            "• Role-based cookie access\n"
+            "• Daily claim limits\n"
+            "• Trust score multipliers\n"
+            "• Entertainment games\n"
+            "• Enhanced analytics\n\n"
+            "**📋 Getting Started:**"
         ),
         color=0x5865f2,
         timestamp=datetime.now(timezone.utc)
@@ -722,7 +817,8 @@ async def send_welcome_message(channel):
             "`/cookie` - Claim a cookie\n"
             "`/daily` - Get daily points\n"
             "`/points` - Check balance\n"
-            "`/help` - All commands"
+            "`/help` - All commands\n"
+            "`/games` - View games"
         ),
         inline=True
     )
@@ -731,25 +827,128 @@ async def send_welcome_message(channel):
         name="🍪 Cookie Types",
         value=(
             "Netflix • Spotify • Prime\n"
-            "ChatGPT • Claude • More!"
+            "ChatGPT • Claude • Trading\n"
+            "And many more!"
         ),
         inline=True
     )
     
     embed.add_field(
-        name="⚠️ Important Rules",
+        name="🎭 Role Benefits",
         value=(
-            "• Submit feedback in 15 mins\n"
-            "• Include screenshots\n"
-            "• Enable DMs for cookies\n"
-            "• No feedback = blacklist!"
+            "• **Free**: Basic access\n"
+            "• **Premium**: Lower costs\n"
+            "• **VIP**: Major discounts\n"
+            "• **Elite**: Minimal costs\n"
+            "• **Booster**: Amazing perks!"
         ),
         inline=False
     )
     
-    embed.set_footer(text="Cookie Bot v2.0 | Premium Features Enabled")
+    embed.add_field(
+        name="⚠️ Important Rules",
+        value=(
+            "• Submit feedback in **15 minutes**\n"
+            "• Include screenshots in feedback\n"
+            "• Enable DMs to receive cookies\n"
+            "• No feedback = **30 day blacklist**\n"
+            "• Check your daily limits per role"
+        ),
+        inline=False
+    )
+    
+    embed.set_footer(text="Cookie Bot v2.1 | Premium Features Enabled")
     
     await channel.send(embed=embed)
+
+async def send_games_welcome_message(channel):
+    embed = discord.Embed(
+        title="🎮 Welcome to the Games Room!",
+        description=(
+            "Test your luck and earn or lose points!\n\n"
+            "**Available Games:**"
+        ),
+        color=0x9b59b6
+    )
+    
+    embed.add_field(
+        name="🎰 Slots",
+        value="`/slots play <amount>` - Classic slot machine\nMin: 5, Max: 200 points",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="🎲 Betting",
+        value="`/bet solo/group points` - Number guessing game\nSolo or multiplayer modes",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="🎭 Robbing",
+        value="`/rob @user` - Steal points from others\nSuccess based on trust scores",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="🎰 Divine Gamble",
+        value="`/gamble divine` - Ultimate risk (5% win chance)\nMassive rewards or curse",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="🎁 Giveaways",
+        value="Watch for point giveaways hosted by the owner!",
+        inline=False
+    )
+    
+    embed.set_footer(text="Remember: The house always wins! Gamble responsibly.")
+    
+    await channel.send(embed=embed)
+
+@bot.hybrid_command(name="roleconfig", description="Configure specific role benefits")
+@commands.has_permissions(administrator=True)
+async def role_config(ctx, role: discord.Role):
+    server = await bot.db.servers.find_one({"server_id": ctx.guild.id})
+    if not server:
+        await ctx.send("❌ Please run `/setup` first!")
+        return
+        
+    config = await bot.db.config.find_one({"_id": "bot_config"})
+    default_roles = config.get("default_roles", {})
+    
+    embed = discord.Embed(
+        title=f"🎭 Configure {role.name}",
+        description="Current configuration:",
+        color=role.color
+    )
+    
+    role_data = server.get("roles", {}).get(str(role.id), {})
+    
+    embed.add_field(
+        name="General Benefits",
+        value=(
+            f"Daily Bonus: {role_data.get('daily_bonus', 0)} points\n"
+            f"Trust Multiplier: {role_data.get('trust_multiplier', 1.0)}x\n"
+            f"Game Benefits: {role_data.get('game_benefits', {}).get('slots_max_bet_bonus', 0)} slots bonus"
+        ),
+        inline=False
+    )
+    
+    if "cookie_access" in role_data:
+        cookie_text = []
+        for cookie, access in list(role_data["cookie_access"].items())[:5]:
+            if access.get("enabled"):
+                cookie_text.append(
+                    f"**{cookie}**: {access['cost']} pts, {access['cooldown']}h CD, {access['daily_limit']} daily"
+                )
+        
+        embed.add_field(
+            name="Cookie Access",
+            value="\n".join(cookie_text) or "No specific cookie configuration",
+            inline=False
+        )
+    
+    await ctx.send(embed=embed)
 
 @bot.hybrid_command(name="config", description="Configure bot settings")
 @commands.has_permissions(administrator=True)
@@ -817,6 +1016,7 @@ async def help_command(ctx):
         value=(
             "`/setup` - Interactive setup wizard\n"
             "`/quicksetup` - Quick setup with defaults\n"
+            "`/roleconfig` - Configure role benefits\n"
             "`/config` - View/change settings\n"
             "`/toggle` - Enable/disable features"
         ),
@@ -827,12 +1027,25 @@ async def help_command(ctx):
         name="👤 User Commands",
         value=(
             "`/cookie` - Claim a cookie\n"
-            "`/daily` - Get daily points\n"
+            "`/daily` - Get daily points + role bonus\n"
             "`/points` - Check your balance\n"
-            "`/status` - View your status\n"
+            "`/status` - View detailed status\n"
             "`/stock` - Check cookie availability\n"
             "`/feedback` - Submit feedback\n"
-            "`/invites` - Check invite stats"
+            "`/invites` - Check invite stats\n"
+            "`/refresh` - Refresh role benefits"
+        ),
+        inline=False
+    )
+    
+    embed.add_field(
+        name="🎮 Game Commands",
+        value=(
+            "`/games` - View all games guide\n"
+            "`/slots play` - Play slot machine\n"
+            "`/bet` - Start a betting game\n"
+            "`/rob` - Rob another user\n"
+            "`/gamble divine` - Divine gamble"
         ),
         inline=False
     )
@@ -840,11 +1053,12 @@ async def help_command(ctx):
     embed.add_field(
         name="🎭 Role Benefits",
         value=(
-            "Different roles get different benefits:\n"
-            "• Lower costs\n"
+            "• Daily bonus points\n"
+            "• Lower cookie costs\n"
             "• Reduced cooldowns\n"
-            "• Bonus daily points\n"
-            "• Access to premium cookies"
+            "• Higher daily limits\n"
+            "• Trust multipliers\n"
+            "• Game bonuses"
         ),
         inline=False
     )
@@ -859,7 +1073,7 @@ async def help_command(ctx):
         inline=False
     )
     
-    embed.set_footer(text="Cookie Bot v2.0 | Made with ❤️")
+    embed.set_footer(text="Cookie Bot v2.1")
     
     await ctx.send(embed=embed)
 
