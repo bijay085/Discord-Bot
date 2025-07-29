@@ -160,6 +160,20 @@ class TimerManageView(discord.ui.View):
         await interaction.response.send_message("🎯 Starting game now!", ephemeral=True)
         await self.bet_game.start_guessing_phase()
 
+class ConfirmView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=30)
+        self.confirmed = False
+    
+    @discord.ui.button(label="Confirm", style=discord.ButtonStyle.success, emoji="✅")
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.confirmed = True
+        self.stop()
+    
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger, emoji="❌")
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.stop()
+        
 class BetGame:
     def __init__(self, cog, host, mode: str, currency: str, initial_bet: int = None):
         self.cog = cog
@@ -365,9 +379,13 @@ class BetGame:
             
         self.phase = "ended"
         
-        if self.timer_task:
+        if self.timer_task and not self.timer_task.done():
             self.timer_task.cancel()
-        
+            try:
+                await self.timer_task
+            except asyncio.CancelledError:
+                pass
+
         winner = None
         closest_diff = float('inf')
         

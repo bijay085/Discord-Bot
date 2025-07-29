@@ -40,7 +40,29 @@ class SlotsCog(commands.Cog):
         
         self.total_weight = sum(s["weight"] for s in self.symbols.values())
         self.lose_weight = 100 - self.total_weight
+        self.cleanup_cooldowns.start()  # ADD THIS LINE
         
+    async def cog_load(self):
+        print("🎮 SlotsCog loaded")
+        
+    async def cog_unload(self):
+        self.user_cooldowns.clear()
+        self.cleanup_cooldowns.cancel()
+
+    @tasks.loop(hours=1)
+    async def cleanup_cooldowns(self):
+        now = datetime.now(timezone.utc)
+        to_remove = []
+        for user_id, last_spin in self.user_cooldowns.items():
+            if (now - last_spin).total_seconds() > 3600:
+                to_remove.append(user_id)
+        for user_id in to_remove:
+            del self.user_cooldowns[user_id]
+
+    @cleanup_cooldowns.before_loop
+    async def before_cleanup_cooldowns(self):
+        await self.bot.wait_until_ready()
+
     async def cog_load(self):
         print("🎮 SlotsCog loaded")
         

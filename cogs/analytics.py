@@ -16,12 +16,29 @@ class AnalyticsCog(commands.Cog):
         self.command_cache = defaultdict(int)
         self.user_cache = set()
         self._command_batch = []
-        self._max_batch_size = 50
+        self._max_batch_size = 25  # CHANGED FROM 50
+        self._batch_timeout = 5  # NEW
+        self._last_batch_time = datetime.now(timezone.utc)  # NEW
+        self.batch_processor.start()  # NEW
         
     async def cog_unload(self):
         self.update_analytics.cancel()
+        self.batch_processor.cancel()  # NEW
         await self.flush_cache()
         await self.flush_command_batch()
+        
+    @tasks.loop(seconds=5)
+    async def batch_processor(self):
+        if self._command_batch and (
+            len(self._command_batch) >= self._max_batch_size or
+            (datetime.now(timezone.utc) - self._last_batch_time).total_seconds() > self._batch_timeout
+        ):
+            await self.flush_command_batch()
+            self._last_batch_time = datetime.now(timezone.utc)
+
+    @batch_processor.before_loop
+    async def before_batch_processor(self):
+        await self.bot.wait_until_ready()
         
     async def log_action(self, guild_id: int, message: str, color: discord.Color = discord.Color.blue()):
         cookie_cog = self.bot.get_cog("CookieCog")

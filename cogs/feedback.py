@@ -423,7 +423,7 @@ class FeedbackCog(commands.Cog):
                             return
                         
                         image_extensions = ['.png', '.jpg', '.jpeg', '.gif', '.webp']
-                        has_image = any(att.filename.lower().endswith(ext) for att in message.attachments for ext in image_extensions)
+                        has_image = any(att.filename.lower().endswith(ext.lower()) for att in message.attachments for ext in image_extensions)
                         
                         if has_image:
                             cookie_type = last_claim.get("type", "unknown")

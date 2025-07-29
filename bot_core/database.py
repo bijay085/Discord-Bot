@@ -40,11 +40,15 @@ class DatabaseHandler:
                     index_name = '_'.join([f"{k}_{v}" for k, v in index_config['keys']])
                     
                     if index_name not in existing_names:
-                        await self.bot.db[collection].create_index(
-                            index_config['keys'],
-                            unique=index_config.get('unique', False)
-                        )
-                        print(f"📑 Index created: {index_name}")
+                        try:
+                            await self.bot.db[collection].create_index(
+                                index_config['keys'],
+                                unique=index_config.get('unique', False)
+                            )
+                            print(f"📑 Index created: {index_name}")
+                        except Exception as e:
+                            if "already exists" not in str(e):
+                                logger.warning(f"⚠️ Index creation failed for {collection}: {e}")
                         
             except Exception as e:
                 logger.warning(f"⚠️ Index error for {collection}: {e}")

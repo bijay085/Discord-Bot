@@ -161,6 +161,10 @@ class CookieCog(commands.Cog):
                 "total_claims": 0,
                 "blacklisted": False,
                 "blacklist_expires": None,
+                "invited_users": [],
+                "pending_invites": 0,
+                "verified_invites": 0,
+                "fake_invites": 0,
                 "preferences": {
                     "dm_notifications": True,
                     "claim_confirmations": True,
@@ -297,6 +301,11 @@ class CookieCog(commands.Cog):
     
     def get_user_role_key(self, user: discord.Member) -> str:
         role_ids = sorted([r.id for r in user.roles if r.id != user.guild.default_role.id])
+        # Use hash for long role lists to avoid key length issues
+        if len(role_ids) > 10:
+            import hashlib
+            role_hash = hashlib.md5(':'.join(map(str, role_ids)).encode()).hexdigest()[:16]
+            return f"{user.id}:h:{role_hash}"
         return f"{user.id}:{':'.join(map(str, role_ids))}"
     
     async def get_user_role_config(self, member: discord.Member, server: dict) -> Dict:
@@ -471,8 +480,9 @@ class CookieCog(commands.Cog):
         try:
             if interaction.user.id in self.active_claims:
                 await interaction.followup.send("⏳ Please wait for your current claim to complete!", ephemeral=True)
+                del self.active_claims[interaction.user.id]
                 return
-                
+            
             self.active_claims[interaction.user.id] = True
             
             progress_msg = await interaction.followup.send(

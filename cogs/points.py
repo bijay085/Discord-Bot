@@ -99,8 +99,11 @@ class PointsCog(commands.Cog):
             if user_data.get("daily_claimed"):
                 daily_claimed = user_data["daily_claimed"]
                 # Ensure daily_claimed is timezone-aware
-                if daily_claimed.tzinfo is None:
-                    daily_claimed = daily_claimed.replace(tzinfo=timezone.utc)
+                if isinstance(daily_claimed, datetime):
+                    if daily_claimed.tzinfo is None:
+                        daily_claimed = daily_claimed.replace(tzinfo=timezone.utc)
+                elif isinstance(daily_claimed, str):
+                    daily_claimed = datetime.fromisoformat(daily_claimed.replace('Z', '+00:00'))
                 
                 # Fixed daily reset logic - check if it's a new day
                 now = datetime.now(timezone.utc)

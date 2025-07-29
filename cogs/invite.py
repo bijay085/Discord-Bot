@@ -79,6 +79,25 @@ class InviteCog(commands.Cog):
         self.invite_cache_update.start()
         self.pending_rewards = {}
         self.tracked_members = {}
+        self.cleanup_tracked_members.start()  # ADD THIS LINE
+        
+    async def cog_unload(self):
+        self.invite_cache_update.cancel()
+        self.cleanup_tracked_members.cancel()
+        
+    @tasks.loop(hours=6)
+    async def cleanup_tracked_members(self):
+        cutoff = datetime.now(timezone.utc) - timedelta(days=1)
+        to_remove = []
+        for member_id, data in self.tracked_members.items():
+            if data["joined_at"] < cutoff:
+                to_remove.append(member_id)
+        for member_id in to_remove:
+            del self.tracked_members[member_id]
+
+    @cleanup_tracked_members.before_loop
+    async def before_cleanup_tracked_members(self):
+        await self.bot.wait_until_ready()
         
     async def log_action(self, guild_id: int, message: str, color: discord.Color = discord.Color.blue()):
         cookie_cog = self.bot.get_cog("CookieCog")

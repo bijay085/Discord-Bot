@@ -215,7 +215,7 @@ class RobCog(commands.Cog):
                 {
                     "$inc": {
                         "points": points_to_steal,
-                        "trust_score": 0.5,
+                        "trust_score": min(100, current_trust + 0.5),
                         "game_stats.rob.successes": 1,
                         "game_stats.rob.profit": points_to_steal
                     }
@@ -252,7 +252,7 @@ class RobCog(commands.Cog):
                 {
                     "$inc": {
                         "points": -penalty,
-                        "trust_score": -1,
+                        "trust_score": max(0, current_trust - 1),
                         "game_stats.rob.attempts": 1,
                         "game_stats.rob.profit": -penalty
                     }

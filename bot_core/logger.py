@@ -19,6 +19,7 @@ class WebhookHandler(logging.Handler):
         self.last_sent = {}
         self.rate_limit_window = 60  # seconds
         self.max_messages_per_window = 10
+        self.error_counts = {}  # NEW LINE
         
     async def send_to_webhook(self, record):
         if not self.webhook_url or not self.session:
@@ -35,6 +36,15 @@ class WebhookHandler(logging.Handler):
             # Check if we've sent too many messages
             if len(self.last_sent) >= self.max_messages_per_window:
                 return
+            
+            # ADD THIS BLOCK - Error counting logic
+            error_key = f"{record.pathname}:{record.lineno}"
+            if error_key in self.error_counts:
+                self.error_counts[error_key] += 1
+                if self.error_counts[error_key] > 3:
+                    return  # Stop sending after 3 of same error
+            else:
+                self.error_counts[error_key] = 1
             
             webhook = discord.Webhook.from_url(self.webhook_url, session=self.session)
             
