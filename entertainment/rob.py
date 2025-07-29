@@ -72,8 +72,53 @@ class RobCog(commands.Cog):
         if not user:
             user = {
                 "user_id": user_id,
+                "username": str(user_id),
                 "points": 0,
+                "total_earned": 0,
+                "total_spent": 0,
                 "trust_score": 50,
+                "account_created": datetime.now(timezone.utc),
+                "first_seen": datetime.now(timezone.utc),
+                "last_active": datetime.now(timezone.utc),
+                "daily_claimed": None,
+                "invite_count": 0,
+                "invited_users": [],
+                "pending_invites": 0,
+                "verified_invites": 0,
+                "fake_invites": 0,
+                "last_claim": None,
+                "cookie_claims": {},
+                "daily_claims": {},
+                "weekly_claims": 0,
+                "total_claims": 0,
+                "blacklisted": False,
+                "blacklist_expires": None,
+                "preferences": {
+                    "dm_notifications": True,
+                    "claim_confirmations": True,
+                    "feedback_reminders": True
+                },
+                "statistics": {
+                    "feedback_streak": 0,
+                    "perfect_ratings": 0,
+                    "favorite_cookie": None,
+                    "divine_gambles": 0,
+                    "divine_wins": 0,
+                    "divine_losses": 0,
+                    "rob_wins": 0,
+                    "rob_losses": 0,
+                    "rob_winnings": 0,
+                    "rob_losses_amount": 0,
+                    "times_robbed": 0,
+                    "amount_stolen_from": 0,
+                    "slots_played": 0,
+                    "slots_won": 0,
+                    "slots_lost": 0,
+                    "slots_profit": 0,
+                    "slots_biggest_win": 0,
+                    "slots_current_streak": 0,
+                    "slots_best_streak": 0
+                },
                 "game_stats": {
                     "rob": {"attempts": 0, "successes": 0, "profit": 0}
                 }
@@ -86,6 +131,11 @@ class RobCog(commands.Cog):
             
         best_config = {}
         highest_priority = -1
+        
+        # Get fresh server data to ensure we have latest role configs
+        server = await self.db.servers.find_one({"server_id": member.guild.id})
+        if not server or not server.get("roles"):
+            return {}
         
         for role in member.roles:
             role_config = server["roles"].get(str(role.id))
@@ -236,8 +286,8 @@ class RobCog(commands.Cog):
                 {
                     "$inc": {
                         "points": -points_to_steal,
-                        "game_stats.rob.times_robbed": 1,
-                        "game_stats.rob.amount_stolen": points_to_steal
+                        "statistics.times_robbed": 1,
+                        "statistics.amount_stolen_from": points_to_steal
                     }
                 }
             )

@@ -663,6 +663,11 @@ class BetCog(commands.Cog):
         best_config = {}
         highest_priority = -1
         
+        # Get fresh server data to ensure we have latest role configs
+        server = await self.db.servers.find_one({"server_id": member.guild.id})
+        if not server or not server.get("roles"):
+            return {}
+        
         for role in member.roles:
             role_config = server["roles"].get(str(role.id))
             if role_config and isinstance(role_config, dict):
