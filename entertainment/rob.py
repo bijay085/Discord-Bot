@@ -66,71 +66,56 @@ class RobCog(commands.Cog):
     async def before_cleanup(self):
         await self.bot.wait_until_ready()
         
-    async def get_or_create_user(self, user_id: int, username: str = None):
+    async def get_user_data(self, user_id: int):
         user = await self.db.users.find_one({"user_id": user_id})
         if not user:
             user = {
                 "user_id": user_id,
-                "username": username or "Unknown",
                 "points": 0,
-                "total_earned": 0,
-                "total_spent": 0,
                 "trust_score": 50,
-                "account_created": datetime.now(timezone.utc),
-                "first_seen": datetime.now(timezone.utc),
-                "last_active": datetime.now(timezone.utc),
-                "daily_claimed": None,
-                "invite_count": 0,
-                "last_claim": None,
-                "cookie_claims": {},
-                "weekly_claims": 0,
-                "total_claims": 0,
-                "blacklisted": False,
-                "blacklist_expires": None,
-                "preferences": {
-                    "dm_notifications": True,
-                    "claim_confirmations": True,
-                    "feedback_reminders": True
-                },
-                "statistics": {
-                    "feedback_streak": 0,
-                    "perfect_ratings": 0,
-                    "favorite_cookie": None,
-                    "rob_wins": 0,
-                    "rob_losses": 0,
-                    "rob_winnings": 0,
-                    "rob_losses_amount": 0,
-                    "times_robbed": 0,
-                    "amount_stolen_from": 0
+                "game_stats": {
+                    "rob": {"attempts": 0, "successes": 0, "profit": 0}
                 }
             }
-            await self.db.users.insert_one(user)
-        else:
-            await self.db.users.update_one(
-                {"user_id": user_id},
-                {"$set": {"last_active": datetime.now(timezone.utc)}}
-            )
         return user
+        
+    async def get_user_role_config(self, member: discord.Member, server: dict) -> dict:
+        if not server.get("role_based"):
+            return {}
+            
+        best_config = {}
+        highest_priority = -1
+        
+        for role in member.roles:
+            role_config = server["roles"].get(str(role.id))
+            if role_config and isinstance(role_config, dict):
+                if role.position > highest_priority:
+                    highest_priority = role.position
+                    best_config = role_config
+        
+        return best_config
     
     async def log_action(self, guild_id: int, message: str, color: discord.Color = discord.Color.blue()):
         cookie_cog = self.bot.get_cog("CookieCog")
         if cookie_cog:
             await cookie_cog.log_action(guild_id, message, color)
     
-    def calculate_success_chance(self, robber_trust: float, victim_trust: float) -> int:
+    def calculate_success_chance(self, robber_trust: float, victim_trust: float, rob_bonus: int = 0) -> int:
+        base_chance = 20
+        
         if robber_trust == victim_trust:
-            return 40
+            base_chance = 40
         elif robber_trust > victim_trust:
             if victim_trust < 20:
-                return 90
+                base_chance = 90
             elif victim_trust < 40:
-                return 70
+                base_chance = 70
             elif victim_trust < 60:
-                return 50
+                base_chance = 50
             else:
-                return 30
-        else:
-            return 20
+                base_chance = 30
+        
+        return min(100, base_chance + rob_bonus)
     
     def calculate_points_to_steal(self, victim_points: float) -> float:
         if victim_points == 0:
@@ -202,8 +187,8 @@ class RobCog(commands.Cog):
         roll = random.randint(1, 100)
         success = roll <= success_chance
         
-        robber_data = await self.get_or_create_user(robber_id, robber_name)
-        victim_data = await self.get_or_create_user(victim_id, victim_name)
+        robber_data = await self.get_user_data(robber_id)
+        victim_data = await self.get_user_data(victim_id)
         
         result = {
             "success": success,
@@ -231,8 +216,8 @@ class RobCog(commands.Cog):
                     "$inc": {
                         "points": points_to_steal,
                         "trust_score": 0.5,
-                        "statistics.rob_wins": 1,
-                        "statistics.rob_winnings": points_to_steal
+                        "game_stats.rob.successes": 1,
+                        "game_stats.rob.profit": points_to_steal
                     }
                 }
             )
@@ -242,11 +227,21 @@ class RobCog(commands.Cog):
                 {
                     "$inc": {
                         "points": -points_to_steal,
-                        "statistics.times_robbed": 1,
-                        "statistics.amount_stolen_from": points_to_steal
+                        "game_stats.rob.times_robbed": 1,
+                        "game_stats.rob.amount_stolen": points_to_steal
                     }
                 }
             )
+            
+            await self.db.rob_history.insert_one({
+                "robber_id": robber_id,
+                "victim_id": victim_id,
+                "timestamp": datetime.now(timezone.utc),
+                "success": True,
+                "amount": points_to_steal,
+                "robber_trust": robber_data.get("trust_score", 50),
+                "victim_trust": victim_data.get("trust_score", 50)
+            })
         else:
             penalty = round(robber_data["points"] * 0.3, 2)
             result["points_transferred"] = penalty
@@ -258,8 +253,8 @@ class RobCog(commands.Cog):
                     "$inc": {
                         "points": -penalty,
                         "trust_score": -1,
-                        "statistics.rob_losses": 1,
-                        "statistics.rob_losses_amount": penalty
+                        "game_stats.rob.attempts": 1,
+                        "game_stats.rob.profit": -penalty
                     }
                 }
             )
@@ -272,6 +267,26 @@ class RobCog(commands.Cog):
                     }
                 }
             )
+            
+            await self.db.rob_history.insert_one({
+                "robber_id": robber_id,
+                "victim_id": victim_id,
+                "timestamp": datetime.now(timezone.utc),
+                "success": False,
+                "penalty": penalty,
+                "robber_trust": robber_data.get("trust_score", 50),
+                "victim_trust": victim_data.get("trust_score", 50)
+            })
+        
+        await self.db.statistics.update_one(
+            {"_id": "global_stats"},
+            {
+                "$inc": {
+                    "game_stats.rob_attempts": 1,
+                    "game_stats.rob_successes": 1 if success else 0
+                }
+            }
+        )
         
         return result
     
@@ -309,12 +324,18 @@ class RobCog(commands.Cog):
             await ctx.send(embed=embed, ephemeral=True)
             return
         
-        robber_data = await self.get_or_create_user(ctx.author.id, str(ctx.author))
-        victim_data = await self.get_or_create_user(target.id, str(target))
+        robber_data = await self.get_user_data(ctx.author.id)
+        victim_data = await self.get_user_data(target.id)
+        
+        server = await self.db.servers.find_one({"server_id": ctx.guild.id})
+        role_config = await self.get_user_role_config(ctx.author, server) if server else {}
+        
+        rob_bonus = role_config.get("game_benefits", {}).get("rob_success_bonus", 0) if role_config else 0
         
         success_chance = self.calculate_success_chance(
             robber_data.get("trust_score", 50),
-            victim_data.get("trust_score", 50)
+            victim_data.get("trust_score", 50),
+            rob_bonus
         )
         
         embed = discord.Embed(
@@ -339,6 +360,13 @@ class RobCog(commands.Cog):
             value=f"**???**",
             inline=True
         )
+        
+        if rob_bonus > 0:
+            embed.add_field(
+                name="🎭 Role Bonus",
+                value=f"+{rob_bonus}% success rate",
+                inline=True
+            )
         
         embed.add_field(
             name="⚠️ Risk/Reward",
@@ -412,13 +440,15 @@ class RobCog(commands.Cog):
             embed.add_field(name="📈 Trust Gained", value=f"**+{result['trust_change']}**", inline=True)
             embed.add_field(name="💰 Your Balance", value=f"**{result['robber_points_before'] + result['points_transferred']:.2f}**", inline=True)
             
+            if rob_bonus > 0:
+                embed.set_footer(text=f"Role bonus applied: +{rob_bonus}% success rate")
+            
             await self.log_action(
                 ctx.guild.id,
                 f"💰 {ctx.author.mention} successfully robbed **{result['points_transferred']}** points from {target.mention}!",
                 discord.Color.green()
             )
             
-            # Send detailed DM to robber
             try:
                 robber_dm = discord.Embed(
                     title="💰 Robbery Successful - Detailed Report",
@@ -446,7 +476,6 @@ class RobCog(commands.Cog):
             except:
                 pass
             
-            # Send DM to victim
             try:
                 victim_dm = discord.Embed(
                     title="💸 You've Been Robbed!",
@@ -482,7 +511,6 @@ class RobCog(commands.Cog):
                 discord.Color.red()
             )
             
-            # Send detailed DM to robber
             try:
                 robber_dm = discord.Embed(
                     title="🚨 Robbery Failed - Detailed Report",
@@ -510,7 +538,6 @@ class RobCog(commands.Cog):
             except:
                 pass
             
-            # Send DM to victim
             try:
                 victim_dm = discord.Embed(
                     title="🛡️ Robbery Attempt Failed!",
@@ -550,6 +577,9 @@ class RobCog(commands.Cog):
             "robbers": {}
         })
         
+        user_data = await self.get_user_data(ctx.author.id)
+        stats = user_data.get("game_stats", {}).get("rob", {})
+        
         embed = discord.Embed(
             title="🎭 Your Rob Statistics",
             color=discord.Color.blue(),
@@ -579,6 +609,14 @@ class RobCog(commands.Cog):
                     value=f"Available in **{minutes}** minutes",
                     inline=False
                 )
+        
+        embed.add_field(
+            name="📊 Lifetime Stats",
+            value=f"Successes: **{stats.get('successes', 0)}**\n"
+                  f"Total Attempts: **{stats.get('attempts', 0) + stats.get('successes', 0)}**\n"
+                  f"Net Profit: **{stats.get('profit', 0):.0f}** points",
+            inline=False
+        )
         
         embed.set_footer(text=f"Requested by {ctx.author}")
         await ctx.send(embed=embed, ephemeral=True)
@@ -621,6 +659,16 @@ class RobCog(commands.Cog):
                 "• 3hr cooldown between attempts\n"
                 "• Can be robbed max 2 times per 24hr\n"
                 "• Same target once per 24hr only"
+            ),
+            inline=False
+        )
+        
+        embed.add_field(
+            name="🎭 Role Benefits",
+            value=(
+                "Some roles provide rob success bonuses:\n"
+                "• Check your role benefits with `/refresh`\n"
+                "• Higher tier roles = better success rates"
             ),
             inline=False
         )

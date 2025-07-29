@@ -107,7 +107,6 @@ class GiveawayCog(commands.Cog):
             del self.active_giveaways[giveaway_id]
             return
             
-        # Get final participant list
         reaction = None
         for r in message.reactions:
             if str(r.emoji) == giveaway["emoji"]:
@@ -120,19 +119,16 @@ class GiveawayCog(commands.Cog):
             entries = []
             async for user in reaction.users():
                 if not user.bot and user.id != giveaway["host_id"]:
-                    # Check if user is eligible
                     user_data = await self.db.users.find_one({"user_id": user.id})
                     if not user_data or user_data.get("blacklisted"):
                         continue
                     entries.append(user.id)
         
-        # Pick winner
         if entries:
             winner_id = random.choice(entries)
             winner = self.bot.get_user(winner_id)
             
             if winner:
-                # Award points
                 await self.db.users.update_one(
                     {"user_id": winner_id},
                     {
@@ -142,7 +138,6 @@ class GiveawayCog(commands.Cog):
                     upsert=True
                 )
                 
-                # Update embed
                 embed = discord.Embed(
                     title="🎉 GIVEAWAY ENDED!",
                     description=f"**Winner:** {winner.mention}\n**Prize:** {giveaway['prize']} points",
@@ -153,14 +148,12 @@ class GiveawayCog(commands.Cog):
                 embed.add_field(name="🎁 Prize Claimed", value="✅", inline=True)
                 embed.set_footer(text=f"Hosted by {self.bot.get_user(giveaway['host_id'])}")
                 
-                # Disable view
                 for item in message.components:
                     for child in item.children:
                         child.disabled = True
                 
                 await message.edit(embed=embed, view=None)
                 
-                # Send winner announcement
                 winner_announce = discord.Embed(
                     title="🎊 CONGRATULATIONS!",
                     description=f"{winner.mention} won **{giveaway['prize']}** points!",
@@ -168,7 +161,6 @@ class GiveawayCog(commands.Cog):
                 )
                 await channel.send(embed=winner_announce)
                 
-                # DM winner
                 try:
                     winner_dm = discord.Embed(
                         title="🎉 You Won a Giveaway!",
@@ -181,14 +173,21 @@ class GiveawayCog(commands.Cog):
                 except:
                     pass
                 
-                # Log
                 await self.log_action(
                     channel.guild.id,
                     f"🎁 {winner.mention} won **{giveaway['prize']}** points in giveaway!",
                     discord.Color.gold()
                 )
+                
+                await self.db.statistics.update_one(
+                    {"_id": "global_stats"},
+                    {
+                        "$inc": {
+                            "game_stats.giveaway_points": giveaway["prize"]
+                        }
+                    }
+                )
             else:
-                # Winner not found
                 embed = discord.Embed(
                     title="🎁 GIVEAWAY ENDED",
                     description="Winner could not be determined!",
@@ -196,7 +195,6 @@ class GiveawayCog(commands.Cog):
                 )
                 await message.edit(embed=embed, view=None)
         else:
-            # No entries
             embed = discord.Embed(
                 title="😢 GIVEAWAY ENDED",
                 description="No valid entries!",
@@ -209,7 +207,6 @@ class GiveawayCog(commands.Cog):
             
             await channel.send("💔 No one entered the giveaway.")
         
-        # Remove from active
         del self.active_giveaways[giveaway_id]
     
     @commands.hybrid_group(name="pgiveaway", description="Points giveaway system")
@@ -231,10 +228,8 @@ class GiveawayCog(commands.Cog):
             await ctx.send("❌ Points must be positive!", ephemeral=True)
             return
             
-        # Use default emoji
         emoji = "🎉"
         
-        # Parse duration
         end_time = None
         if duration:
             multipliers = {'s': 1, 'm': 60, 'h': 3600, 'd': 86400}
@@ -248,7 +243,6 @@ class GiveawayCog(commands.Cog):
             await ctx.send("❌ Invalid duration! Use format like: 5m, 1h, 1d", ephemeral=True)
             return
             
-        # Create giveaway embed (no points deduction)
         embed = discord.Embed(
             title="🎁 POINTS GIVEAWAY!",
             description=f"**Prize:** {points} points\n\nReact with {emoji} to enter!",
@@ -260,15 +254,12 @@ class GiveawayCog(commands.Cog):
         embed.add_field(name="🎯 Host", value=ctx.author.mention, inline=True)
         embed.set_footer(text="React to enter • One entry per person")
         
-        # Create view
         giveaway_id = f"{ctx.guild.id}_{ctx.channel.id}_{int(datetime.now().timestamp())}"
         view = GiveawayView(self, giveaway_id)
         
-        # Send message
         message = await ctx.send(embed=embed, view=view)
         await message.add_reaction(emoji)
         
-        # Store giveaway
         self.active_giveaways[giveaway_id] = {
             "guild_id": ctx.guild.id,
             "channel_id": ctx.channel.id,
@@ -281,14 +272,21 @@ class GiveawayCog(commands.Cog):
             "created_at": datetime.now(timezone.utc)
         }
         
-        # Log
         await self.log_action(
             ctx.guild.id,
             f"🎁 {ctx.author.mention} started a **{points}** points giveaway!",
             discord.Color.blue()
         )
         
-        # Update entry count
+        await self.db.statistics.update_one(
+            {"_id": "global_stats"},
+            {
+                "$inc": {
+                    "game_stats.giveaways_created": 1
+                }
+            }
+        )
+        
         self.bot.loop.create_task(self.update_entry_count(giveaway_id))
     
     async def update_entry_count(self, giveaway_id: str):
@@ -304,7 +302,6 @@ class GiveawayCog(commands.Cog):
             try:
                 message = await channel.fetch_message(giveaway["message_id"])
                 
-                # Find reaction
                 reaction = None
                 for r in message.reactions:
                     if str(r.emoji) == giveaway["emoji"]:
@@ -312,16 +309,13 @@ class GiveawayCog(commands.Cog):
                         break
                         
                 if reaction:
-                    # Count valid entries
                     valid_entries = 0
                     entry_list = []
                     
                     async for user in reaction.users():
                         if not user.bot and user.id != giveaway["host_id"]:
-                            # Check if eligible
                             user_data = await self.db.users.find_one({"user_id": user.id})
                             if not user_data or user_data.get("blacklisted"):
-                                # Remove reaction from blacklisted users
                                 try:
                                     await message.remove_reaction(giveaway["emoji"], user)
                                 except:
@@ -330,15 +324,12 @@ class GiveawayCog(commands.Cog):
                             valid_entries += 1
                             entry_list.append(user.id)
                     
-                    # Update embed
                     embed = message.embeds[0]
                     embed.set_field_at(1, name="👥 Entries", value=str(valid_entries), inline=True)
                     await message.edit(embed=embed)
                     
-                    # Update entry list
                     giveaway["entries"] = entry_list
                     
-                # Remove non-matching reactions
                 for reaction in message.reactions:
                     if str(reaction.emoji) != giveaway["emoji"]:
                         async for user in reaction.users():
@@ -359,7 +350,6 @@ class GiveawayCog(commands.Cog):
             await ctx.send("❌ Only the bot owner can manage giveaways!", ephemeral=True)
             return
             
-        # Find active giveaway in this channel
         active_in_channel = None
         for gid, giveaway in self.active_giveaways.items():
             if giveaway["channel_id"] == ctx.channel.id:
