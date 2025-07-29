@@ -1,6 +1,6 @@
 # cogs/feedback.py
 # Location: cogs/feedback.py
-# Description: Feedback system - fixed to remove duplicate messages and allow both photo + text feedback
+# Description: Feedback system - fixed to log both photo and text feedback properly
 
 import discord
 from discord.ext import commands, tasks
@@ -110,6 +110,14 @@ class FeedbackCog(commands.Cog):
                 )
                 trust_text = "+0.25 points (Total: 0.75)"
                 is_complete = True
+                
+                # LOG ACTION FOR TEXT FEEDBACK AFTER PHOTO
+                stars = "⭐" * rating
+                await self.log_action(
+                    interaction.guild_id,
+                    f"📝 {interaction.user.mention} added text feedback for **{last_claim['type']}** cookie {stars} - \"{feedback[:50]}{'...' if len(feedback) > 50 else ''}\"",
+                    discord.Color.green()
+                )
             else:
                 # Only text feedback so far
                 await self.db.users.update_one(
@@ -129,6 +137,14 @@ class FeedbackCog(commands.Cog):
                 )
                 trust_text = "+0.25 points"
                 is_complete = False
+                
+                # LOG ACTION FOR TEXT FEEDBACK ONLY
+                stars = "⭐" * rating
+                await self.log_action(
+                    interaction.guild_id,
+                    f"📝 {interaction.user.mention} submitted text feedback for **{last_claim['type']}** cookie {stars} - \"{feedback[:50]}{'...' if len(feedback) > 50 else ''}\" (Photo pending)",
+                    discord.Color.gold()
+                )
             
             await self.db.feedback.insert_one({
                 "user_id": interaction.user.id,
@@ -377,6 +393,16 @@ class FeedbackCog(commands.Cog):
                                         }
                                     }
                                 )
+                                
+                                # LOG ACTION FOR PHOTO COMPLETING FEEDBACK
+                                stars = "⭐" * last_claim.get("rating", 0) if last_claim.get("rating") else ""
+                                feedback_text = f" - \"{last_claim.get('feedback_text', '')[:50]}{'...' if len(last_claim.get('feedback_text', '')) > 50 else ''}\"" if last_claim.get('feedback_text') else ""
+                                
+                                await self.log_action(
+                                    message.guild.id,
+                                    f"🎉 {message.author.mention} completed feedback for **{cookie_type}** cookie with screenshot {stars}{feedback_text}",
+                                    discord.Color.green()
+                                )
                             else:
                                 # User is submitting screenshot without text feedback (only 0.5)
                                 bonus = 0.5
@@ -395,6 +421,13 @@ class FeedbackCog(commands.Cog):
                                             "statistics.feedback_streak": 1
                                         }
                                     }
+                                )
+                                
+                                # LOG ACTION FOR PHOTO ONLY
+                                await self.log_action(
+                                    message.guild.id,
+                                    f"📸 {message.author.mention} submitted screenshot for **{cookie_type}** cookie (Text feedback pending)",
+                                    discord.Color.gold()
                                 )
                             
                             # Add reactions to the message
@@ -421,23 +454,6 @@ class FeedbackCog(commands.Cog):
                                 await message.author.send(embed=embed)
                             except discord.Forbidden:
                                 pass
-                            
-                            # Log to log channel (no public message in feedback channel)
-                            if last_claim.get("rating"):
-                                stars = "⭐" * last_claim["rating"]
-                                feedback_text = f" - {last_claim.get('feedback_text', '')}" if last_claim.get('feedback_text') else ""
-                                
-                                await self.log_action(
-                                    message.guild.id,
-                                    f"📸 {message.author.mention} completed feedback for **{cookie_type}** cookie {stars}{feedback_text}",
-                                    discord.Color.green()
-                                )
-                            else:
-                                await self.log_action(
-                                    message.guild.id,
-                                    f"📸 {message.author.mention} submitted screenshot for **{cookie_type}** cookie",
-                                    discord.Color.green()
-                                )
                                 
             except discord.HTTPException:
                 # Handle failed message edits/sends
