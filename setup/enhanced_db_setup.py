@@ -34,7 +34,8 @@ class EnhancedDatabaseSetup:
         required_collections = [
             "users", "servers", "config", "statistics", 
             "feedback", "analytics", "blacklist_appeals", 
-            "cookie_logs", "transactions", "warnings"
+            "cookie_logs", "transactions", "warnings",
+            "game_config", "game_stats", "divine_gambles", "bet_history", "rob_history"
         ]
         
         for collection in required_collections:
@@ -49,6 +50,7 @@ class EnhancedDatabaseSetup:
         await self.initialize_statistics()
         await self.initialize_analytics()
         await self.setup_cookie_tracking()
+        await self.initialize_game_config()
         
     async def create_enhanced_indexes(self):
         print("\n📑 Creating optimized indexes...")
@@ -86,6 +88,22 @@ class EnhancedDatabaseSetup:
             'analytics': [
                 {'keys': [('timestamp', -1)], 'unique': False},
                 {'keys': [('type', 1)], 'unique': False}
+            ],
+            'game_stats': [
+                {'keys': [('user_id', 1, 'game_type', 1)], 'unique': True},
+                {'keys': [('server_id', 1, 'game_type', 1)], 'unique': False}
+            ],
+            'divine_gambles': [
+                {'keys': [('user_id', 1, 'timestamp', -1)], 'unique': False},
+                {'keys': [('server_id', 1, 'timestamp', -1)], 'unique': False}
+            ],
+            'bet_history': [
+                {'keys': [('user_id', 1, 'timestamp', -1)], 'unique': False},
+                {'keys': [('game_id', 1)], 'unique': False}
+            ],
+            'rob_history': [
+                {'keys': [('robber_id', 1, 'timestamp', -1)], 'unique': False},
+                {'keys': [('victim_id', 1, 'timestamp', -1)], 'unique': False}
             ]
         }
         
@@ -131,15 +149,16 @@ class EnhancedDatabaseSetup:
                 "analytics_tracking": True,
                 "premium_features": True,
                 "invite_tracking": True,
-                "auto_directory_creation": True
+                "auto_directory_creation": True,
+                "games_enabled": True
             },
             "point_rates": {
                 "daily": 2,
                 "invite": 2,
-                "boost": 50,
-                "vote": 5,
+                "boost": 5,
+                "vote": 2,
                 "feedback_bonus": 1,
-                "perfect_rating_bonus": 2
+                "perfect_rating_bonus": 0
             },
             "cooldown_settings": {
                 "daily_hours": 24,
@@ -183,10 +202,128 @@ class EnhancedDatabaseSetup:
                     "version": "2.0.0",
                     "features": config_doc["features"],
                     "premium_tiers": config_doc["premium_tiers"],
+                    "default_roles": self.get_default_roles(),  # Update roles with new structure
                     "last_updated": datetime.now(timezone.utc)
                 }}
             )
             print("✅ Updated bot configuration")
+    
+    async def initialize_game_config(self):
+        print("\n🎮 Initializing game configurations...")
+        
+        game_config = await self.db.game_config.find_one({"_id": "global_games"})
+        
+        if not game_config:
+            games_doc = {
+                "_id": "global_games",
+                "games": {
+                    "slots": {
+                        "enabled": True,
+                        "name": "Slot Machine",
+                        "description": "Classic 3-reel slot machine",
+                        "emoji": "🎰",
+                        "min_bet": 5,
+                        "max_bet": 200,
+                        "max_bet_percentage": 0.25,
+                        "cooldown": 10,
+                        "symbols": {
+                            "🍒": {"name": "Cherry", "payout": 1.5, "weight": 20},
+                            "🍋": {"name": "Lemon", "payout": 2, "weight": 10},
+                            "🍊": {"name": "Orange", "payout": 3, "weight": 5},
+                            "🍇": {"name": "Grapes", "payout": 5, "weight": 3},
+                            "💎": {"name": "Diamond", "payout": 10, "weight": 1},
+                            "7️⃣": {"name": "Seven", "payout": 50, "weight": 0.2}
+                        }
+                    },
+                    "bet": {
+                        "enabled": True,
+                        "name": "Number Betting",
+                        "description": "Guess the winning number",
+                        "emoji": "🎲",
+                        "solo_enabled": True,
+                        "group_enabled": True,
+                        "max_players": 50,
+                        "join_timer": 60,
+                        "guess_timer": 30,
+                        "solo_range": 10,
+                        "group_base_range": 10,
+                        "group_range_per_player": 2,
+                        "rewards": {
+                            "solo_exact": 1.5,
+                            "solo_close": 0.15,
+                            "group_winner": 1.0,
+                            "group_closest": 0.5
+                        }
+                    },
+                    "rob": {
+                        "enabled": True,
+                        "name": "Robbery System",
+                        "description": "Steal points from other users",
+                        "emoji": "🎭",
+                        "daily_attempts": 2,
+                        "cooldown_hours": 3,
+                        "daily_robbed_limit": 2,
+                        "steal_percentage": {"min": 20, "max": 30},
+                        "penalty_percentage": 30,
+                        "trust_rewards": {"success": 0.5, "failure": -1},
+                        "success_rates": {
+                            "victim_under_20": 90,
+                            "victim_20_40": 70,
+                            "victim_40_60": 50,
+                            "victim_60_plus": 30,
+                            "lower_trust": 20
+                        }
+                    },
+                    "gamble": {
+                        "enabled": True,
+                        "name": "Divine Gamble",
+                        "description": "Ultimate risk for divine blessing",
+                        "emoji": "🎰",
+                        "win_chance": 5,
+                        "cooldown_days": 7,
+                        "requirements": {
+                            "invites": 5,
+                            "trust_score": 60,
+                            "points": 20
+                        },
+                        "entry_cost": {
+                            "trust": 15,
+                            "points": 10
+                        },
+                        "rewards": {
+                            "trust_return": 45,
+                            "points_return": 130,
+                            "curse_duration_hours": 24,
+                            "blessing_duration_days": 7
+                        }
+                    },
+                    "giveaway": {
+                        "enabled": True,
+                        "name": "Points Giveaway",
+                        "description": "Free points giveaways",
+                        "emoji": "🎁",
+                        "owner_only": True,
+                        "entry_emoji": "🎉",
+                        "max_duration_days": 7,
+                        "min_duration_minutes": 5,
+                        "max_active": 5
+                    }
+                },
+                "global_settings": {
+                    "games_channel_required": True,
+                    "announce_big_wins": True,
+                    "big_win_threshold": 500,
+                    "daily_game_limit": 100,
+                    "trust_affects_games": True
+                },
+                "created_at": datetime.now(timezone.utc),
+                "last_updated": datetime.now(timezone.utc)
+            }
+            
+            await self.db.game_config.insert_one(games_doc)
+            print("✅ Created game configurations")
+        else:
+            print("✓ Game configurations exist")
             
     def get_default_cookies(self):
         # Use absolute paths
@@ -213,7 +350,7 @@ class EnhancedDatabaseSetup:
             },
             "prime": {
                 "cost": 4, 
-                "cooldown": 72, 
+                "cooldown": 48, 
                 "directory": os.path.join(base_cookie_dir, "prime"), 
                 "enabled": True,
                 "description": "Amazon Prime accounts",
@@ -231,7 +368,7 @@ class EnhancedDatabaseSetup:
             },
             "tradingview": {
                 "cost": 8, 
-                "cooldown": 96, 
+                "cooldown": 48, 
                 "directory": os.path.join(base_cookie_dir, "tradingview"), 
                 "enabled": True,
                 "description": "TradingView Pro accounts",
@@ -240,7 +377,7 @@ class EnhancedDatabaseSetup:
             },
             "chatgpt": {
                 "cost": 10, 
-                "cooldown": 96, 
+                "cooldown": 72, 
                 "directory": os.path.join(base_cookie_dir, "chatgpt"), 
                 "enabled": True,
                 "description": "ChatGPT Plus accounts",
@@ -249,7 +386,7 @@ class EnhancedDatabaseSetup:
             },
             "claude": {
                 "cost": 12, 
-                "cooldown": 120, 
+                "cooldown": 72, 
                 "directory": os.path.join(base_cookie_dir, "claude"), 
                 "enabled": True,
                 "description": "Claude Pro accounts",
@@ -258,7 +395,7 @@ class EnhancedDatabaseSetup:
             },
             "peacock": {
                 "cost": 4, 
-                "cooldown": 72, 
+                "cooldown": 24, 
                 "directory": os.path.join(base_cookie_dir, "peacock"), 
                 "enabled": True,
                 "description": "Peacock Premium accounts",
@@ -267,7 +404,7 @@ class EnhancedDatabaseSetup:
             },
             "crunchyroll": {
                 "cost": 4, 
-                "cooldown": 48, 
+                "cooldown": 24, 
                 "directory": os.path.join(base_cookie_dir, "crunchyroll"), 
                 "enabled": True,
                 "description": "Crunchyroll Premium accounts",
@@ -276,7 +413,7 @@ class EnhancedDatabaseSetup:
             },
             "canalplus": {
                 "cost": 6, 
-                "cooldown": 72, 
+                "cooldown": 48, 
                 "directory": os.path.join(base_cookie_dir, "canalplus"), 
                 "enabled": True,
                 "description": "Canal+ Premium accounts",
@@ -286,54 +423,418 @@ class EnhancedDatabaseSetup:
         }
     
     def get_default_roles(self):
+        # Get cookie types for easy reference
+        cookie_types = list(self.get_default_cookies().keys())
+        
         return {
             "free": {
                 "name": "Free",
-                "cooldown": 72,
-                "cost": "default",
-                "access": ["netflix", "spotify", "prime"],
+                "description": "Basic access with limited cookies",
+                "emoji": "🆓",
                 "daily_bonus": 0,
-                "trust_multiplier": 1.0
+                "trust_multiplier": 1.0,
+                "game_benefits": {
+                    "slots_max_bet_bonus": 0,
+                    "rob_success_bonus": 0,
+                    "bet_profit_multiplier": 1.0
+                },
+                "cookie_access": {
+                    "netflix": {
+                        "enabled": True,
+                        "cost": 5,  # default cost
+                        "cooldown": 72,  # default cooldown
+                        "daily_limit": 1
+                    },
+                    "spotify": {
+                        "enabled": True,
+                        "cost": 3,
+                        "cooldown": 48,
+                        "daily_limit": 1
+                    },
+                    "prime": {
+                        "enabled": True,
+                        "cost": 4,
+                        "cooldown": 48,
+                        "daily_limit": 1
+                    },
+                    # Other cookies disabled for free role
+                    "jiohotstar": {"enabled": False},
+                    "tradingview": {"enabled": False},
+                    "chatgpt": {"enabled": False},
+                    "claude": {"enabled": False},
+                    "peacock": {"enabled": False},
+                    "crunchyroll": {"enabled": False},
+                    "canalplus": {"enabled": False}
+                }
             },
             "premium": {
                 "name": "Premium",
-                "cooldown": 24,
-                "cost": 2,
-                "access": ["all"],
+                "description": "Enhanced access with reduced costs",
+                "emoji": "⭐",
                 "daily_bonus": 5,
-                "trust_multiplier": 1.5
+                "trust_multiplier": 1.5,
+                "game_benefits": {
+                    "slots_max_bet_bonus": 50,
+                    "rob_success_bonus": 5,
+                    "bet_profit_multiplier": 1.1
+                },
+                "cookie_access": {
+                    "netflix": {
+                        "enabled": True,
+                        "cost": 3,  # reduced cost
+                        "cooldown": 48,  # reduced cooldown
+                        "daily_limit": 2
+                    },
+                    "spotify": {
+                        "enabled": True,
+                        "cost": 2,
+                        "cooldown": 24,
+                        "daily_limit": 2
+                    },
+                    "prime": {
+                        "enabled": True,
+                        "cost": 3,
+                        "cooldown": 24,
+                        "daily_limit": 2
+                    },
+                    "jiohotstar": {
+                        "enabled": True,
+                        "cost": 2,
+                        "cooldown": 24,
+                        "daily_limit": 2
+                    },
+                    "tradingview": {
+                        "enabled": True,
+                        "cost": 6,
+                        "cooldown": 48,
+                        "daily_limit": 1
+                    },
+                    "chatgpt": {
+                        "enabled": True,
+                        "cost": 8,
+                        "cooldown": 48,
+                        "daily_limit": 1
+                    },
+                    "claude": {
+                        "enabled": False
+                    },
+                    "peacock": {
+                        "enabled": True,
+                        "cost": 3,
+                        "cooldown": 24,
+                        "daily_limit": 2
+                    },
+                    "crunchyroll": {
+                        "enabled": True,
+                        "cost": 3,
+                        "cooldown": 24,
+                        "daily_limit": 2
+                    },
+                    "canalplus": {
+                        "enabled": True,
+                        "cost": 5,
+                        "cooldown": 48,
+                        "daily_limit": 1
+                    }
+                }
             },
             "vip": {
                 "name": "VIP",
-                "cooldown": 12,
-                "cost": 1,
-                "access": ["all"],
+                "description": "VIP access with major discounts",
+                "emoji": "💎",
                 "daily_bonus": 10,
-                "trust_multiplier": 2.0
+                "trust_multiplier": 2.0,
+                "game_benefits": {
+                    "slots_max_bet_bonus": 100,
+                    "rob_success_bonus": 10,
+                    "bet_profit_multiplier": 1.2
+                },
+                "cookie_access": {
+                    "netflix": {
+                        "enabled": True,
+                        "cost": 2,
+                        "cooldown": 24,
+                        "daily_limit": 3
+                    },
+                    "spotify": {
+                        "enabled": True,
+                        "cost": 2,
+                        "cooldown": 12,
+                        "daily_limit": 3
+                    },
+                    "prime": {
+                        "enabled": True,
+                        "cost": 2,
+                        "cooldown": 12,
+                        "daily_limit": 3
+                    },
+                    "jiohotstar": {
+                        "enabled": True,
+                        "cost": 2,
+                        "cooldown": 12,
+                        "daily_limit": 3
+                    },
+                    "tradingview": {
+                        "enabled": True,
+                        "cost": 4,
+                        "cooldown": 24,
+                        "daily_limit": 2
+                    },
+                    "chatgpt": {
+                        "enabled": True,
+                        "cost": 5,
+                        "cooldown": 24,
+                        "daily_limit": 2
+                    },
+                    "claude": {
+                        "enabled": True,
+                        "cost": 8,
+                        "cooldown": 48,
+                        "daily_limit": 1
+                    },
+                    "peacock": {
+                        "enabled": True,
+                        "cost": 2,
+                        "cooldown": 12,
+                        "daily_limit": 3
+                    },
+                    "crunchyroll": {
+                        "enabled": True,
+                        "cost": 2,
+                        "cooldown": 12,
+                        "daily_limit": 3
+                    },
+                    "canalplus": {
+                        "enabled": True,
+                        "cost": 3,
+                        "cooldown": 24,
+                        "daily_limit": 2
+                    }
+                }
             },
             "elite": {
                 "name": "Elite",
-                "cooldown": 6,
-                "cost": 0,
-                "access": ["all"],
+                "description": "Elite access with minimal costs",
+                "emoji": "🎯",
                 "daily_bonus": 20,
-                "trust_multiplier": 2.5
+                "trust_multiplier": 2.5,
+                "game_benefits": {
+                    "slots_max_bet_bonus": 200,
+                    "rob_success_bonus": 15,
+                    "bet_profit_multiplier": 1.3
+                },
+                "cookie_access": {
+                    "netflix": {
+                        "enabled": True,
+                        "cost": 1,
+                        "cooldown": 12,
+                        "daily_limit": 5
+                    },
+                    "spotify": {
+                        "enabled": True,
+                        "cost": 1,
+                        "cooldown": 6,
+                        "daily_limit": 5
+                    },
+                    "prime": {
+                        "enabled": True,
+                        "cost": 1,
+                        "cooldown": 6,
+                        "daily_limit": 5
+                    },
+                    "jiohotstar": {
+                        "enabled": True,
+                        "cost": 1,
+                        "cooldown": 6,
+                        "daily_limit": 5
+                    },
+                    "tradingview": {
+                        "enabled": True,
+                        "cost": 2,
+                        "cooldown": 12,
+                        "daily_limit": 3
+                    },
+                    "chatgpt": {
+                        "enabled": True,
+                        "cost": 3,
+                        "cooldown": 12,
+                        "daily_limit": 3
+                    },
+                    "claude": {
+                        "enabled": True,
+                        "cost": 4,
+                        "cooldown": 24,
+                        "daily_limit": 2
+                    },
+                    "peacock": {
+                        "enabled": True,
+                        "cost": 1,
+                        "cooldown": 6,
+                        "daily_limit": 5
+                    },
+                    "crunchyroll": {
+                        "enabled": True,
+                        "cost": 1,
+                        "cooldown": 6,
+                        "daily_limit": 5
+                    },
+                    "canalplus": {
+                        "enabled": True,
+                        "cost": 2,
+                        "cooldown": 12,
+                        "daily_limit": 3
+                    }
+                }
             },
             "booster": {
                 "name": "Booster",
-                "cooldown": 0,
-                "cost": 0,
-                "access": ["all"],
-                "daily_bonus": 50,
-                "trust_multiplier": 3.0
+                "description": "Server boosters get amazing perks",
+                "emoji": "🚀",
+                "daily_bonus": 20,
+                "trust_multiplier": 3.0,
+                "game_benefits": {
+                    "slots_max_bet_bonus": 300,
+                    "rob_success_bonus": 20,
+                    "bet_profit_multiplier": 1.5
+                },
+                "cookie_access": {
+                    # All cookies very cheap/free for boosters
+                    "netflix": {
+                        "enabled": True,
+                        "cost": 1,
+                        "cooldown": 3,
+                        "daily_limit": 10
+                    },
+                    "spotify": {
+                        "enabled": True,
+                        "cost": 1,
+                        "cooldown": 3,
+                        "daily_limit": 10
+                    },
+                    "prime": {
+                        "enabled": True,
+                        "cost": 1,
+                        "cooldown": 3,
+                        "daily_limit": 10
+                    },
+                    "jiohotstar": {
+                        "enabled": True,
+                        "cost": 1,
+                        "cooldown": 3,
+                        "daily_limit": 10
+                    },
+                    "tradingview": {
+                        "enabled": True,
+                        "cost": 1,
+                        "cooldown": 6,
+                        "daily_limit": 5
+                    },
+                    "chatgpt": {
+                        "enabled": True,
+                        "cost": 2,
+                        "cooldown": 6,
+                        "daily_limit": 5
+                    },
+                    "claude": {
+                        "enabled": True,
+                        "cost": 2,
+                        "cooldown": 12,
+                        "daily_limit": 3
+                    },
+                    "peacock": {
+                        "enabled": True,
+                        "cost": 1,
+                        "cooldown": 3,
+                        "daily_limit": 10
+                    },
+                    "crunchyroll": {
+                        "enabled": True,
+                        "cost": 1,
+                        "cooldown": 3,
+                        "daily_limit": 10
+                    },
+                    "canalplus": {
+                        "enabled": True,
+                        "cost": 1,
+                        "cooldown": 6,
+                        "daily_limit": 5
+                    }
+                }
             },
             "staff": {
                 "name": "Staff",
-                "cooldown": 0,
-                "cost": 0,
-                "access": ["all"],
-                "daily_bonus": 100,
-                "trust_multiplier": 5.0
+                "description": "Staff members have special privileges",
+                "emoji": "🛡️",
+                "daily_bonus": 5,
+                "trust_multiplier": 5.0,
+                "game_benefits": {
+                    "slots_max_bet_bonus": 500,
+                    "rob_success_bonus": 25,
+                    "bet_profit_multiplier": 2.0
+                },
+                "cookie_access": {
+                    # Staff can test all cookies with moderate costs
+                    "netflix": {
+                        "enabled": True,
+                        "cost": 4,
+                        "cooldown": 5,
+                        "daily_limit": -1  # unlimited
+                    },
+                    "spotify": {
+                        "enabled": True,
+                        "cost": 4,
+                        "cooldown": 5,
+                        "daily_limit": -1
+                    },
+                    "prime": {
+                        "enabled": True,
+                        "cost": 4,
+                        "cooldown": 5,
+                        "daily_limit": -1
+                    },
+                    "jiohotstar": {
+                        "enabled": True,
+                        "cost": 4,
+                        "cooldown": 5,
+                        "daily_limit": -1
+                    },
+                    "tradingview": {
+                        "enabled": True,
+                        "cost": 4,
+                        "cooldown": 5,
+                        "daily_limit": -1
+                    },
+                    "chatgpt": {
+                        "enabled": True,
+                        "cost": 4,
+                        "cooldown": 5,
+                        "daily_limit": -1
+                    },
+                    "claude": {
+                        "enabled": True,
+                        "cost": 4,
+                        "cooldown": 5,
+                        "daily_limit": -1
+                    },
+                    "peacock": {
+                        "enabled": True,
+                        "cost": 4,
+                        "cooldown": 5,
+                        "daily_limit": -1
+                    },
+                    "crunchyroll": {
+                        "enabled": True,
+                        "cost": 4,
+                        "cooldown": 5,
+                        "daily_limit": -1
+                    },
+                    "canalplus": {
+                        "enabled": True,
+                        "cost": 4,
+                        "cooldown": 5,
+                        "daily_limit": -1
+                    }
+                }
             }
         }
     
@@ -355,6 +856,19 @@ class EnhancedDatabaseSetup:
                 "total_servers": 0,
                 "total_points_distributed": 0,
                 "total_blacklists": 0,
+                "game_stats": {
+                    "slots_played": 0,
+                    "slots_won": 0,
+                    "slots_jackpots": 0,
+                    "bets_created": 0,
+                    "bets_completed": 0,
+                    "rob_attempts": 0,
+                    "rob_successes": 0,
+                    "divine_gambles": 0,
+                    "divine_wins": 0,
+                    "giveaways_created": 0,
+                    "giveaway_points": 0
+                },
                 "created_at": datetime.now(timezone.utc),
                 "last_reset": datetime.now(timezone.utc)
             }
@@ -362,7 +876,29 @@ class EnhancedDatabaseSetup:
             await self.db.statistics.insert_one(stats_doc)
             print("✅ Created global statistics")
         else:
-            print("✓ Statistics tracking exists")
+            # Update existing stats to include game stats
+            if "game_stats" not in stats:
+                await self.db.statistics.update_one(
+                    {"_id": "global_stats"},
+                    {"$set": {
+                        "game_stats": {
+                            "slots_played": 0,
+                            "slots_won": 0,
+                            "slots_jackpots": 0,
+                            "bets_created": 0,
+                            "bets_completed": 0,
+                            "rob_attempts": 0,
+                            "rob_successes": 0,
+                            "divine_gambles": 0,
+                            "divine_wins": 0,
+                            "giveaways_created": 0,
+                            "giveaway_points": 0
+                        }
+                    }}
+                )
+                print("✅ Updated statistics with game stats")
+            else:
+                print("✓ Statistics tracking exists")
     
     async def initialize_analytics(self):
         print("\n📈 Initializing analytics collection...")
@@ -376,6 +912,7 @@ class EnhancedDatabaseSetup:
                 "total_cookies": 0,
                 "total_transactions": 0,
                 "average_trust_score": 50,
+                "total_games_played": 0,
                 "last_updated": datetime.now(timezone.utc)
             },
             {
@@ -391,7 +928,8 @@ class EnhancedDatabaseSetup:
                         "average_execution_time": 0
                     } for cmd in ["cookie", "daily", "points", "help", "stock", 
                                   "feedback", "invites", "status", "leaderboard", 
-                                  "refresh", "analytics"]
+                                  "refresh", "analytics", "slots", "bet", "rob", 
+                                  "gamble", "pgiveaway", "games"]
                 },
                 "last_updated": datetime.now(timezone.utc)
             },
@@ -422,7 +960,54 @@ class EnhancedDatabaseSetup:
                 "engagement_metrics": {
                     "commands_per_user": 0,
                     "claims_per_user": 0,
-                    "feedback_rate": 0
+                    "feedback_rate": 0,
+                    "games_per_user": 0
+                },
+                "last_updated": datetime.now(timezone.utc)
+            },
+            {
+                "_id": "game_analytics",
+                "games": {
+                    "slots": {
+                        "total_plays": 0,
+                        "total_wins": 0,
+                        "total_wagered": 0,
+                        "total_payout": 0,
+                        "house_edge": 0,
+                        "biggest_win": 0,
+                        "average_bet": 0
+                    },
+                    "bet": {
+                        "total_games": 0,
+                        "solo_games": 0,
+                        "group_games": 0,
+                        "total_pot": 0,
+                        "average_players": 0,
+                        "biggest_pot": 0
+                    },
+                    "rob": {
+                        "total_attempts": 0,
+                        "successful_robs": 0,
+                        "failed_robs": 0,
+                        "points_stolen": 0,
+                        "penalties_paid": 0,
+                        "most_robbed_user": None
+                    },
+                    "gamble": {
+                        "total_gambles": 0,
+                        "blessed_count": 0,
+                        "cursed_count": 0,
+                        "trust_lost": 0,
+                        "trust_gained": 0,
+                        "points_lost": 0,
+                        "points_gained": 0
+                    },
+                    "giveaway": {
+                        "total_giveaways": 0,
+                        "total_points_given": 0,
+                        "average_participants": 0,
+                        "biggest_giveaway": 0
+                    }
                 },
                 "last_updated": datetime.now(timezone.utc)
             }
@@ -434,7 +1019,15 @@ class EnhancedDatabaseSetup:
                 await self.db.analytics.insert_one(doc)
                 print(f"✅ Created {doc['_id']} analytics")
             else:
-                print(f"✓ {doc['_id']} analytics exists")
+                # Update existing docs with game analytics
+                if doc["_id"] == "game_analytics" and not existing.get("games"):
+                    await self.db.analytics.update_one(
+                        {"_id": "game_analytics"},
+                        {"$set": doc}
+                    )
+                    print(f"✅ Updated game analytics")
+                else:
+                    print(f"✓ {doc['_id']} analytics exists")
     
     async def setup_cookie_tracking(self):
         print("\n🍪 Setting up cookie tracking system...")
@@ -512,11 +1105,25 @@ Files will be randomly selected and distributed.
                 "cookie": None,
                 "feedback": None,
                 "log": None,
-                "announcement": None
+                "announcement": None,
+                "games": None
             },
             "cookies": self.get_default_cookies(),
             "role_based": True,
-            "roles": {},
+            "roles": {
+                # This will be populated when roles are created with specific cookie settings
+            },
+            "games": {
+                "enabled": True,
+                "channel_required": True,
+                "games_config": {
+                    "slots": {"enabled": True, "custom_settings": {}},
+                    "bet": {"enabled": True, "custom_settings": {}},
+                    "rob": {"enabled": True, "custom_settings": {}},
+                    "gamble": {"enabled": True, "custom_settings": {}},
+                    "giveaway": {"enabled": True, "custom_settings": {}}
+                }
+            },
             "settings": {
                 "feedback_required": True,
                 "feedback_timeout": 15,
@@ -544,7 +1151,14 @@ Files will be randomly selected and distributed.
                 "weekly_claims": 8,
                 "daily_claimed": None,
                 "invite_count": 5,
-                "blacklisted": False
+                "blacklisted": False,
+                "daily_claims": {},  # Track daily claims per cookie type
+                "game_stats": {
+                    "slots": {"played": 0, "won": 0, "profit": 0},
+                    "bet": {"played": 0, "won": 0, "profit": 0},
+                    "rob": {"attempts": 0, "successes": 0, "profit": 0},
+                    "gamble": {"attempts": 0, "wins": 0}
+                }
             },
             {
                 "user_id": 222222222,
@@ -558,7 +1172,14 @@ Files will be randomly selected and distributed.
                 "weekly_claims": 3,
                 "daily_claimed": None,
                 "invite_count": 10,
-                "blacklisted": False
+                "blacklisted": False,
+                "daily_claims": {},  # Track daily claims per cookie type
+                "game_stats": {
+                    "slots": {"played": 0, "won": 0, "profit": 0},
+                    "bet": {"played": 0, "won": 0, "profit": 0},
+                    "rob": {"attempts": 0, "successes": 0, "profit": 0},
+                    "gamble": {"attempts": 0, "wins": 0}
+                }
             }
         ]
         
@@ -576,7 +1197,23 @@ Files will be randomly selected and distributed.
                 "statistics": {
                     "feedback_streak": 0,
                     "perfect_ratings": 0,
-                    "favorite_cookie": None
+                    "favorite_cookie": None,
+                    "divine_gambles": 0,
+                    "divine_wins": 0,
+                    "divine_losses": 0,
+                    "rob_wins": 0,
+                    "rob_losses": 0,
+                    "rob_winnings": 0,
+                    "rob_losses_amount": 0,
+                    "times_robbed": 0,
+                    "amount_stolen_from": 0,
+                    "slots_played": 0,
+                    "slots_won": 0,
+                    "slots_lost": 0,
+                    "slots_profit": 0,
+                    "slots_biggest_win": 0,
+                    "slots_current_streak": 0,
+                    "slots_best_streak": 0
                 }
             })
             
@@ -590,12 +1227,15 @@ Files will be randomly selected and distributed.
         
         collections = await self.db.list_collection_names()
         config = await self.db.config.find_one({"_id": "bot_config"})
+        game_config = await self.db.game_config.find_one({"_id": "global_games"})
         
         checks = {
             "Collections": len(collections),
             "Configuration": "✅" if config else "❌",
+            "Game Configuration": "✅" if game_config else "❌",
             "Cookie Types": len(config.get("default_cookies", {})) if config else 0,
             "Role Types": len(config.get("default_roles", {})) if config else 0,
+            "Game Types": len(game_config.get("games", {})) if game_config else 0,
             "Users": await self.db.users.count_documents({}),
             "Servers": await self.db.servers.count_documents({})
         }
@@ -614,7 +1254,8 @@ Files will be randomly selected and distributed.
             "Total Users": await self.db.users.count_documents({}),
             "Total Servers": await self.db.servers.count_documents({}),
             "Blacklisted Users": await self.db.users.count_documents({"blacklisted": True}),
-            "Total Feedback": await self.db.feedback.count_documents({})
+            "Total Feedback": await self.db.feedback.count_documents({}),
+            "Game Configurations": await self.db.game_config.count_documents({})
         }
         
         for key, value in stats.items():
@@ -625,6 +1266,7 @@ Files will be randomly selected and distributed.
             print(f"\nBot Version: {config.get('version', 'Unknown')}")
             print(f"Owner ID: {config.get('owner_id')}")
             print(f"Maintenance Mode: {config.get('maintenance_mode', False)}")
+            print(f"Games Enabled: {config.get('features', {}).get('games_enabled', False)}")
     
     async def run(self):
         try:
