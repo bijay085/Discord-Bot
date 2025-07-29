@@ -47,7 +47,7 @@ class EntertainmentHandler(commands.Cog):
             except Exception as e:
                 self.failed_modules.append(module_name)
     
-    @commands.command(name="entertainment", aliases=["ent"])
+    @commands.command(name="ent_status", aliases=["entstatus"])
     @commands.is_owner()
     async def entertainment_status(self, ctx):
         embed = discord.Embed(
