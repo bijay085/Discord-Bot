@@ -49,6 +49,7 @@ class RobCog(commands.Cog):
         
     async def cog_unload(self):
         self.cleanup_cooldowns.cancel()
+        self.rob_cooldowns.clear()
         
     @tasks.loop(hours=1)
     async def cleanup_cooldowns(self):
@@ -190,6 +191,9 @@ class RobCog(commands.Cog):
         robber_data = await self.get_user_data(robber_id)
         victim_data = await self.get_user_data(victim_id)
         
+        robber_trust = robber_data.get("trust_score", 50)
+        victim_trust = victim_data.get("trust_score", 50)
+        
         result = {
             "success": success,
             "roll": roll,
@@ -210,12 +214,17 @@ class RobCog(commands.Cog):
             result["points_transferred"] = points_to_steal
             result["trust_change"] = 0.5
             
+            # Calculate new trust score
+            new_robber_trust = min(100, robber_trust + 0.5)
+            
             await self.db.users.update_one(
                 {"user_id": robber_id},
                 {
+                    "$set": {
+                        "trust_score": new_robber_trust
+                    },
                     "$inc": {
                         "points": points_to_steal,
-                        "trust_score": min(100, current_trust + 0.5),
                         "game_stats.rob.successes": 1,
                         "game_stats.rob.profit": points_to_steal
                     }
@@ -239,20 +248,25 @@ class RobCog(commands.Cog):
                 "timestamp": datetime.now(timezone.utc),
                 "success": True,
                 "amount": points_to_steal,
-                "robber_trust": robber_data.get("trust_score", 50),
-                "victim_trust": victim_data.get("trust_score", 50)
+                "robber_trust": robber_trust,
+                "victim_trust": victim_trust
             })
         else:
             penalty = round(robber_data["points"] * 0.3, 2)
             result["points_transferred"] = penalty
             result["trust_change"] = -1
             
+            # Calculate new trust score
+            new_robber_trust = max(0, robber_trust - 1)
+            
             await self.db.users.update_one(
                 {"user_id": robber_id},
                 {
+                    "$set": {
+                        "trust_score": new_robber_trust
+                    },
                     "$inc": {
                         "points": -penalty,
-                        "trust_score": max(0, current_trust - 1),
                         "game_stats.rob.attempts": 1,
                         "game_stats.rob.profit": -penalty
                     }
@@ -274,8 +288,8 @@ class RobCog(commands.Cog):
                 "timestamp": datetime.now(timezone.utc),
                 "success": False,
                 "penalty": penalty,
-                "robber_trust": robber_data.get("trust_score", 50),
-                "victim_trust": victim_data.get("trust_score", 50)
+                "robber_trust": robber_trust,
+                "victim_trust": victim_trust
             })
         
         await self.db.statistics.update_one(
@@ -464,7 +478,7 @@ class RobCog(commands.Cog):
                     inline=False
                 )
                 robber_dm.add_field(name="💵 Amount Stolen", value=f"**{result['points_transferred']}** points", inline=True)
-                robber_dm.add_field(name="📈 Trust Gained", value=f"**+0.5** (now {robber_data.get('trust_score', 50) + 0.5})", inline=True)
+                robber_dm.add_field(name="📈 Trust Gained", value=f"**+0.5** (now {min(100, robber_data.get('trust_score', 50) + 0.5)})", inline=True)
                 robber_dm.add_field(
                     name="💰 Balance Change",
                     value=f"Before: **{result['robber_points_before']}**\n"

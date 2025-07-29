@@ -40,14 +40,14 @@ class SlotsCog(commands.Cog):
         
         self.total_weight = sum(s["weight"] for s in self.symbols.values())
         self.lose_weight = 100 - self.total_weight
-        self.cleanup_cooldowns.start()  # ADD THIS LINE
+        self.cleanup_cooldowns.start()
         
     async def cog_load(self):
         print("🎮 SlotsCog loaded")
         
     async def cog_unload(self):
-        self.user_cooldowns.clear()
         self.cleanup_cooldowns.cancel()
+        self.user_cooldowns.clear()
 
     @tasks.loop(hours=1)
     async def cleanup_cooldowns(self):
@@ -62,9 +62,6 @@ class SlotsCog(commands.Cog):
     @cleanup_cooldowns.before_loop
     async def before_cleanup_cooldowns(self):
         await self.bot.wait_until_ready()
-
-    async def cog_load(self):
-        print("🎮 SlotsCog loaded")
         
     async def get_user_data(self, user_id: int):
         user = await self.db.users.find_one({"user_id": user_id})
@@ -73,10 +70,39 @@ class SlotsCog(commands.Cog):
                 "user_id": user_id,
                 "points": 0,
                 "trust_score": 50,
+                "statistics": {
+                    "slots_played": 0,
+                    "slots_won": 0,
+                    "slots_lost": 0,
+                    "slots_profit": 0,
+                    "slots_biggest_win": 0,
+                    "slots_current_streak": 0,
+                    "slots_best_streak": 0
+                },
                 "game_stats": {
-                    "slots": {"played": 0, "won": 0, "profit": 0, "biggest_win": 0, "current_streak": 0, "best_streak": 0}
+                    "slots": {"played": 0, "won": 0, "profit": 0}
                 }
             }
+        else:
+            # Ensure statistics field exists
+            if "statistics" not in user:
+                user["statistics"] = {
+                    "slots_played": 0,
+                    "slots_won": 0,
+                    "slots_lost": 0,
+                    "slots_profit": 0,
+                    "slots_biggest_win": 0,
+                    "slots_current_streak": 0,
+                    "slots_best_streak": 0
+                }
+            # Ensure game_stats field exists
+            if "game_stats" not in user:
+                user["game_stats"] = {
+                    "slots": {"played": 0, "won": 0, "profit": 0}
+                }
+            elif "slots" not in user.get("game_stats", {}):
+                user["game_stats"]["slots"] = {"played": 0, "won": 0, "profit": 0}
+                
         return user
         
     async def get_user_role_config(self, member: discord.Member, server: dict) -> dict:
@@ -175,9 +201,6 @@ class SlotsCog(commands.Cog):
         if bet < 5:
             await ctx.send("❌ Minimum bet is 5 points!", ephemeral=True)
             return
-        if bet > 200:
-            await ctx.send("❌ Maximum bet is 200 points!", ephemeral=True)
-            return
             
         user_data = await self.get_user_data(ctx.author.id)
         
@@ -237,31 +260,39 @@ class SlotsCog(commands.Cog):
         profit = winnings - bet
         
         if winnings > 0:
+            # Update user statistics
+            current_streak = user_data.get("statistics", {}).get("slots_current_streak", 0) + 1
+            best_streak = user_data.get("statistics", {}).get("slots_best_streak", 0)
+            biggest_win = user_data.get("statistics", {}).get("slots_biggest_win", 0)
+            
+            update_dict = {
+                "$inc": {
+                    "points": winnings,
+                    "total_earned": winnings,
+                    "statistics.slots_played": 1,
+                    "statistics.slots_won": 1,
+                    "statistics.slots_profit": profit,
+                    "game_stats.slots.played": 1,
+                    "game_stats.slots.won": 1,
+                    "game_stats.slots.profit": profit
+                },
+                "$set": {
+                    "statistics.slots_current_streak": current_streak
+                }
+            }
+            
+            # Update biggest win if necessary
+            if winnings > biggest_win:
+                update_dict["$set"]["statistics.slots_biggest_win"] = winnings
+                
+            # Update best streak if necessary
+            if current_streak > best_streak:
+                update_dict["$set"]["statistics.slots_best_streak"] = current_streak
+            
             await self.db.users.update_one(
                 {"user_id": ctx.author.id},
-                {
-                    "$inc": {
-                        "points": winnings,
-                        "total_earned": winnings,
-                        "game_stats.slots.played": 1,
-                        "game_stats.slots.won": 1,
-                        "game_stats.slots.profit": profit,
-                        "game_stats.slots.current_streak": 1
-                    },
-                    "$max": {
-                        "game_stats.slots.biggest_win": winnings
-                    }
-                }
+                update_dict
             )
-            
-            user_data = await self.db.users.find_one({"user_id": ctx.author.id})
-            current_streak = user_data["game_stats"]["slots"].get("current_streak", 1)
-            best_streak = user_data["game_stats"]["slots"].get("best_streak", 0)
-            if current_streak > best_streak:
-                await self.db.users.update_one(
-                    {"user_id": ctx.author.id},
-                    {"$set": {"game_stats.slots.best_streak": current_streak}}
-                )
             
             symbol_name = self.symbols[winning_symbol]["name"]
             embed = discord.Embed(
@@ -303,11 +334,14 @@ class SlotsCog(commands.Cog):
                 {"user_id": ctx.author.id},
                 {
                     "$inc": {
+                        "statistics.slots_played": 1,
+                        "statistics.slots_lost": 1,
+                        "statistics.slots_profit": -bet,
                         "game_stats.slots.played": 1,
                         "game_stats.slots.profit": -bet
                     },
                     "$set": {
-                        "game_stats.slots.current_streak": 0
+                        "statistics.slots_current_streak": 0
                     }
                 }
             )
@@ -341,12 +375,14 @@ class SlotsCog(commands.Cog):
     @slots.command(name="stats", description="View your slot machine statistics")
     async def slots_stats(self, ctx):
         user_data = await self.get_user_data(ctx.author.id)
-        stats = user_data.get("game_stats", {}).get("slots", {})
+        stats = user_data.get("statistics", {})
+        game_stats = user_data.get("game_stats", {}).get("slots", {})
         
-        played = stats.get("played", 0)
-        won = stats.get("won", 0)
+        # Combine statistics from both sources
+        played = stats.get("slots_played", 0) or game_stats.get("played", 0)
+        won = stats.get("slots_won", 0) or game_stats.get("won", 0)
         lost = played - won
-        profit = stats.get("profit", 0)
+        profit = stats.get("slots_profit", 0) or game_stats.get("profit", 0)
         
         embed = discord.Embed(
             title="🎰 Your Slots Statistics",
@@ -363,9 +399,9 @@ class SlotsCog(commands.Cog):
             embed.add_field(name="📊 Win Rate", value=f"{win_rate:.1f}%", inline=True)
         
         embed.add_field(name="💰 Net Profit/Loss", value=f"{profit:+d} points", inline=True)
-        embed.add_field(name="🎯 Biggest Win", value=f"{stats.get('biggest_win', 0)} points", inline=True)
-        embed.add_field(name="🔥 Current Streak", value=str(stats.get("current_streak", 0)), inline=True)
-        embed.add_field(name="⭐ Best Streak", value=str(stats.get("best_streak", 0)), inline=True)
+        embed.add_field(name="🎯 Biggest Win", value=f"{stats.get('slots_biggest_win', 0)} points", inline=True)
+        embed.add_field(name="🔥 Current Streak", value=str(stats.get("slots_current_streak", 0)), inline=True)
+        embed.add_field(name="⭐ Best Streak", value=str(stats.get("slots_best_streak", 0)), inline=True)
         embed.add_field(name="💵 Current Balance", value=f"{user_data['points']} points", inline=True)
         
         await ctx.send(embed=embed, ephemeral=True)
