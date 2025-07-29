@@ -1,13 +1,12 @@
 # cogs/invite.py
 # Location: cogs/invite.py
-# Description: Invite tracking system with improved cache handling
+# Description: Updated invite tracking with role benefits and new DB structure
 
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands
-from datetime import datetime, timezone, timedelta
 import asyncio
-import traceback
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, List
 
 class InviteLeaderboardView(discord.ui.View):
@@ -43,6 +42,7 @@ class InviteLeaderboardView(discord.ui.View):
             user = self.cog.bot.get_user(user_data["user_id"])
             username = user.name if user else user_data.get("username", "Unknown")
             invites = user_data.get("invite_count", 0)
+            verified = user_data.get("verified_invites", 0)
             
             medal = ""
             if idx == 1:
@@ -52,7 +52,7 @@ class InviteLeaderboardView(discord.ui.View):
             elif idx == 3:
                 medal = "🥉"
             
-            leaderboard_text += f"{medal} **{idx}.** {username} - **{invites}** invites\n"
+            leaderboard_text += f"{medal} **{idx}.** {username} - **{invites}** invites ({verified} verified)\n"
         
         embed.description = leaderboard_text or "No invites recorded yet!"
         embed.set_footer(text=f"Page {self.current_page + 1}/{total_pages}")
@@ -76,7 +76,6 @@ class InviteCog(commands.Cog):
         self.bot = bot
         self.db = bot.db
         self.invites = {}
-        self.verified_role_id = 1349289354329198623
         self.invite_cache_update.start()
         self.pending_rewards = {}
         self.tracked_members = {}
@@ -101,19 +100,47 @@ class InviteCog(commands.Cog):
                 "last_active": datetime.now(timezone.utc),
                 "daily_claimed": None,
                 "invite_count": 0,
+                "invited_users": [],
                 "pending_invites": 0,
                 "verified_invites": 0,
                 "fake_invites": 0,
                 "last_claim": None,
                 "cookie_claims": {},
+                "daily_claims": {},
                 "weekly_claims": 0,
                 "total_claims": 0,
                 "blacklisted": False,
                 "blacklist_expires": None,
-                "invited_users": []
+                "preferences": {
+                    "dm_notifications": True,
+                    "claim_confirmations": True,
+                    "feedback_reminders": True
+                },
+                "statistics": {
+                    "feedback_streak": 0,
+                    "perfect_ratings": 0,
+                    "favorite_cookie": None
+                }
             }
             await self.db.users.insert_one(user)
         return user
+    
+    async def get_user_role_config(self, member: discord.Member, server: dict) -> dict:
+        """Get the best role configuration for a user based on role hierarchy"""
+        if not server.get("role_based"):
+            return {}
+            
+        best_config = {}
+        highest_priority = -1
+        
+        for role in member.roles:
+            role_config = server["roles"].get(str(role.id))
+            if role_config and isinstance(role_config, dict):
+                if role.position > highest_priority:
+                    highest_priority = role.position
+                    best_config = role_config
+        
+        return best_config
     
     @tasks.loop(minutes=30)
     async def invite_cache_update(self):
@@ -165,6 +192,11 @@ class InviteCog(commands.Cog):
                 
             guild = member.guild
             
+            # Check if server has invite tracking enabled
+            server = await self.db.servers.find_one({"server_id": guild.id})
+            if server and not server.get("settings", {}).get("invite_tracking", True):
+                return
+            
             if guild.id not in self.invites:
                 self.invites[guild.id] = await guild.invites()
                 return
@@ -183,6 +215,12 @@ class InviteCog(commands.Cog):
             if used_invite and used_invite.inviter:
                 inviter_data = await self.get_or_create_user(used_invite.inviter.id, str(used_invite.inviter))
                 
+                # Get inviter's role benefits
+                inviter_member = guild.get_member(used_invite.inviter.id)
+                role_config = {}
+                if inviter_member and server and server.get("role_based"):
+                    role_config = await self.get_user_role_config(inviter_member, server)
+                
                 await self.db.users.update_one(
                     {"user_id": used_invite.inviter.id},
                     {
@@ -192,8 +230,10 @@ class InviteCog(commands.Cog):
                             "username": str(member),
                             "joined_at": datetime.now(timezone.utc),
                             "verified": False,
-                            "invite_code": used_invite.code
-                        }}
+                            "invite_code": used_invite.code,
+                            "role_benefits_at_time": role_config.get("name") if role_config else None
+                        }},
+                        "$set": {"last_active": datetime.now(timezone.utc)}
                     }
                 )
                 
@@ -212,6 +252,14 @@ class InviteCog(commands.Cog):
                 embed.add_field(name="Invited By", value=used_invite.inviter.mention, inline=True)
                 embed.add_field(name="Invite Code", value=f"`{used_invite.code}`", inline=True)
                 embed.add_field(name="Total Uses", value=f"**{matching.uses}**", inline=True)
+                
+                if role_config:
+                    embed.add_field(
+                        name="🎭 Inviter Role",
+                        value=f"{role_config.get('name', 'Unknown')}",
+                        inline=True
+                    )
+                
                 embed.set_thumbnail(url=member.display_avatar.url)
                 embed.set_footer(text=f"Member #{guild.member_count}")
                 
@@ -233,13 +281,27 @@ class InviteCog(commands.Cog):
                     )
                     dm_embed.add_field(name="Invite Code", value=f"`{used_invite.code}`", inline=True)
                     dm_embed.add_field(name="Total Invites", value=f"**{inviter_data.get('invite_count', 0) + 1}**", inline=True)
-                    dm_embed.set_footer(text="You'll receive points when they get verified!")
+                    
+                    # Get verification role info
+                    verified_role_id = server.get("verified_role_id") if server else None
+                    if not verified_role_id:
+                        # Try default role ID
+                        verified_role_id = 1349289354329198623
+                    
+                    dm_embed.add_field(
+                        name="📌 Next Step",
+                        value=f"You'll receive points when they get the <@&{verified_role_id}> role!",
+                        inline=False
+                    )
+                    
+                    dm_embed.set_footer(text="Keep inviting to earn more points!")
                     
                     await used_invite.inviter.send(embed=dm_embed)
                 except:
                     pass
                     
         except Exception as e:
+            import traceback
             print(f"Error tracking invite: {traceback.format_exc()}")
     
     @commands.Cog.listener()
@@ -248,7 +310,15 @@ class InviteCog(commands.Cog):
             if before.bot:
                 return
             
-            verified_role = after.guild.get_role(self.verified_role_id)
+            # Get server configuration
+            server = await self.db.servers.find_one({"server_id": after.guild.id})
+            if not server:
+                return
+            
+            # Get verified role ID from server config or use default
+            verified_role_id = server.get("verified_role_id", 1349289354329198623)
+            verified_role = after.guild.get_role(verified_role_id)
+            
             if not verified_role:
                 return
             
@@ -257,11 +327,25 @@ class InviteCog(commands.Cog):
             
             if not had_role and has_role:
                 config = await self.db.config.find_one({"_id": "bot_config"})
-                invite_points = config.get("point_rates", {}).get("invite", 2)
+                base_invite_points = config.get("point_rates", {}).get("invite", 2)
                 
                 member_data = self.tracked_members.get(after.id)
                 if member_data:
                     inviter_id = member_data["inviter_id"]
+                    
+                    # Get inviter's role config for bonus
+                    inviter = after.guild.get_member(inviter_id)
+                    bonus_points = 0
+                    role_name = None
+                    
+                    if inviter and server.get("role_based"):
+                        role_config = await self.get_user_role_config(inviter, server)
+                        if role_config:
+                            invite_bonus = role_config.get("invite_bonus", 0)
+                            bonus_points = invite_bonus
+                            role_name = role_config.get("name")
+                    
+                    total_points = base_invite_points + bonus_points
                     
                     await self.db.users.update_one(
                         {
@@ -273,13 +357,12 @@ class InviteCog(commands.Cog):
                             "$inc": {
                                 "pending_invites": -1,
                                 "verified_invites": 1,
-                                "points": invite_points,
-                                "total_earned": invite_points
+                                "points": total_points,
+                                "total_earned": total_points
                             }
                         }
                     )
                     
-                    inviter = self.bot.get_user(inviter_id)
                     if inviter:
                         embed = discord.Embed(
                             title="💰 Invite Reward Earned!",
@@ -287,13 +370,25 @@ class InviteCog(commands.Cog):
                             color=discord.Color.green(),
                             timestamp=datetime.now(timezone.utc)
                         )
-                        embed.add_field(name="Points Earned", value=f"**+{invite_points}** points", inline=True)
+                        embed.add_field(name="Base Points", value=f"**+{base_invite_points}**", inline=True)
+                        
+                        if bonus_points > 0:
+                            embed.add_field(name="Role Bonus", value=f"**+{bonus_points}**", inline=True)
+                            embed.add_field(name="Total Earned", value=f"**+{total_points}** points", inline=True)
+                            embed.add_field(name="🎭 Your Role", value=role_name, inline=False)
+                        else:
+                            embed.add_field(name="Total Earned", value=f"**+{total_points}** points", inline=True)
+                        
                         embed.add_field(name="Member", value=after.name, inline=True)
                         embed.set_thumbnail(url=after.display_avatar.url)
                         
+                        log_message = f"✅ {inviter.mention} received **{total_points}** points for inviting {after.mention} (Verified)"
+                        if role_name:
+                            log_message += f" [Role: {role_name}]"
+                        
                         await self.log_action(
                             after.guild.id,
-                            f"✅ {inviter.mention} received **{invite_points}** points for inviting {after.mention} (Verified)",
+                            log_message,
                             discord.Color.green()
                         )
                         
@@ -304,10 +399,25 @@ class InviteCog(commands.Cog):
                     
                     del self.tracked_members[after.id]
                 else:
+                    # Check database for pending verification
                     user_data = await self.db.users.find_one({"invited_users.user_id": after.id})
                     if user_data:
                         for invited in user_data.get("invited_users", []):
                             if invited["user_id"] == after.id and not invited.get("verified"):
+                                # Get inviter's current role config
+                                inviter = after.guild.get_member(user_data["user_id"])
+                                bonus_points = 0
+                                role_name = None
+                                
+                                if inviter and server.get("role_based"):
+                                    role_config = await self.get_user_role_config(inviter, server)
+                                    if role_config:
+                                        invite_bonus = role_config.get("invite_bonus", 0)
+                                        bonus_points = invite_bonus
+                                        role_name = role_config.get("name")
+                                
+                                total_points = base_invite_points + bonus_points
+                                
                                 await self.db.users.update_one(
                                     {
                                         "user_id": user_data["user_id"],
@@ -318,17 +428,20 @@ class InviteCog(commands.Cog):
                                         "$inc": {
                                             "pending_invites": -1,
                                             "verified_invites": 1,
-                                            "points": invite_points,
-                                            "total_earned": invite_points
+                                            "points": total_points,
+                                            "total_earned": total_points
                                         }
                                     }
                                 )
                                 
-                                inviter = self.bot.get_user(user_data["user_id"])
                                 if inviter:
+                                    log_message = f"✅ {inviter.mention} received **{total_points}** points for inviting {after.mention} (Verified - Database Recovery)"
+                                    if role_name:
+                                        log_message += f" [Role: {role_name}]"
+                                    
                                     await self.log_action(
                                         after.guild.id,
-                                        f"✅ {inviter.mention} received **{invite_points}** points for inviting {after.mention} (Verified - Database Recovery)",
+                                        log_message,
                                         discord.Color.green()
                                     )
                                 break
@@ -341,6 +454,7 @@ class InviteCog(commands.Cog):
                                 del self.pending_rewards[inviter_id]
                                 
         except Exception as e:
+            import traceback
             print(f"Error in member update: {traceback.format_exc()}")
     
     @commands.Cog.listener()
@@ -404,7 +518,21 @@ class InviteCog(commands.Cog):
             user_data = await self.db.users.find_one({"user_id": user.id})
             
             config = await self.db.config.find_one({"_id": "bot_config"})
-            invite_points = config.get("point_rates", {}).get("invite", 2)
+            base_invite_points = config.get("point_rates", {}).get("invite", 2)
+            
+            # Get user's role benefits
+            server = await self.db.servers.find_one({"server_id": ctx.guild.id})
+            role_config = {}
+            bonus_points = 0
+            role_name = None
+            
+            if server and server.get("role_based"):
+                role_config = await self.get_user_role_config(user, server)
+                if role_config:
+                    bonus_points = role_config.get("invite_bonus", 0)
+                    role_name = role_config.get("name")
+            
+            total_points_per_invite = base_invite_points + bonus_points
             
             embed = discord.Embed(
                 title=f"📨 Invite Statistics: {user.display_name}",
@@ -416,7 +544,7 @@ class InviteCog(commands.Cog):
             if not user_data:
                 embed.description = "No invite data found for this user!"
                 embed.add_field(name="Total Invites", value="**0**", inline=True)
-                embed.add_field(name="Points per Invite", value=f"**{invite_points}**", inline=True)
+                embed.add_field(name="Points per Invite", value=f"**{total_points_per_invite}**", inline=True)
             else:
                 total_invites = user_data.get("invite_count", 0)
                 pending = user_data.get("pending_invites", 0)
@@ -427,11 +555,21 @@ class InviteCog(commands.Cog):
                 embed.add_field(name="✅ Verified", value=f"**{verified}**", inline=True)
                 embed.add_field(name="⏳ Pending", value=f"**{pending}**", inline=True)
                 
-                embed.add_field(name="💰 Points Earned", value=f"**{verified * invite_points}**", inline=True)
-                embed.add_field(name="💸 Potential Points", value=f"**{pending * invite_points}**", inline=True)
+                embed.add_field(name="💰 Points Earned", value=f"**{verified * base_invite_points}** base", inline=True)
+                embed.add_field(name="💸 Potential Points", value=f"**{pending * total_points_per_invite}**", inline=True)
                 embed.add_field(name="❌ Left/Fake", value=f"**{fake}**", inline=True)
                 
-                verified_role = ctx.guild.get_role(self.verified_role_id)
+                if role_name and bonus_points > 0:
+                    embed.add_field(
+                        name="🎭 Role Benefits",
+                        value=f"**{role_name}**: +{bonus_points} bonus per invite\n"
+                              f"Total per invite: **{total_points_per_invite}** points",
+                        inline=False
+                    )
+                
+                # Show verified role info
+                verified_role_id = server.get("verified_role_id", 1349289354329198623) if server else 1349289354329198623
+                verified_role = ctx.guild.get_role(verified_role_id)
                 if verified_role:
                     if verified_role in user.roles:
                         embed.add_field(
@@ -442,7 +580,7 @@ class InviteCog(commands.Cog):
                     else:
                         embed.add_field(
                             name="❌ Verification Status",
-                            value=f"Get <@&{self.verified_role_id}> to earn invite rewards!",
+                            value=f"Get {verified_role.mention} to earn invite rewards!",
                             inline=False
                         )
                 
@@ -473,11 +611,12 @@ class InviteCog(commands.Cog):
                     inline=False
                 )
             
-            embed.set_footer(text=f"Points per verified invite: {invite_points}")
+            embed.set_footer(text=f"Base points per verified invite: {base_invite_points}")
             
             await ctx.send(embed=embed, ephemeral=True)
             
         except Exception as e:
+            import traceback
             print(f"Error in invites command: {traceback.format_exc()}")
             await ctx.send("❌ An error occurred!", ephemeral=True)
     
@@ -508,6 +647,17 @@ class InviteCog(commands.Cog):
                 reason=f"Created by {ctx.author} via bot command"
             )
             
+            # Get user's role benefits
+            server = await self.db.servers.find_one({"server_id": ctx.guild.id})
+            role_config = {}
+            if server and server.get("role_based"):
+                role_config = await self.get_user_role_config(ctx.author, server)
+            
+            config = await self.db.config.find_one({"_id": "bot_config"})
+            base_points = config.get("point_rates", {}).get("invite", 2)
+            bonus_points = role_config.get("invite_bonus", 0) if role_config else 0
+            total_points = base_points + bonus_points
+            
             embed = discord.Embed(
                 title="🔗 Invite Link Created!",
                 description=f"Your personalized invite link is ready",
@@ -518,6 +668,20 @@ class InviteCog(commands.Cog):
             embed.add_field(name="Channel", value=ctx.channel.mention, inline=True)
             embed.add_field(name="Max Uses", value=f"**{uses if uses > 0 else 'Unlimited'}**", inline=True)
             embed.add_field(name="Expires", value=f"**{f'{expires} hours' if expires > 0 else 'Never'}**", inline=True)
+            
+            embed.add_field(
+                name="💰 Points per Verified Invite",
+                value=f"Base: **{base_points}** points",
+                inline=True
+            )
+            
+            if role_config and bonus_points > 0:
+                embed.add_field(
+                    name="🎭 Your Role Bonus",
+                    value=f"+**{bonus_points}** ({role_config.get('name', 'Unknown')})\n"
+                          f"Total: **{total_points}** per invite",
+                    inline=True
+                )
             
             embed.add_field(
                 name="💡 Tip",
@@ -577,6 +741,14 @@ class InviteCog(commands.Cog):
         try:
             await ctx.defer()
             
+            server = await self.db.servers.find_one({"server_id": ctx.guild.id})
+            verified_role_id = server.get("verified_role_id", 1349289354329198623) if server else 1349289354329198623
+            verified_role = ctx.guild.get_role(verified_role_id)
+            
+            if not verified_role:
+                await ctx.send("❌ Verified role not found!", ephemeral=True)
+                return
+            
             synced = 0
             async for user_data in self.db.users.find({"invited_users": {"$exists": True, "$ne": []}}):
                 for invited in user_data.get("invited_users", []):
@@ -584,28 +756,37 @@ class InviteCog(commands.Cog):
                         member_id = invited["user_id"]
                         member = ctx.guild.get_member(member_id)
                         
-                        if member:
-                            verified_role = ctx.guild.get_role(self.verified_role_id)
-                            if verified_role and verified_role in member.roles:
-                                config = await self.db.config.find_one({"_id": "bot_config"})
-                                invite_points = config.get("point_rates", {}).get("invite", 2)
-                                
-                                await self.db.users.update_one(
-                                    {
-                                        "user_id": user_data["user_id"],
-                                        "invited_users.user_id": member_id
-                                    },
-                                    {
-                                        "$set": {"invited_users.$.verified": True},
-                                        "$inc": {
-                                            "pending_invites": -1,
-                                            "verified_invites": 1,
-                                            "points": invite_points,
-                                            "total_earned": invite_points
-                                        }
+                        if member and verified_role in member.roles:
+                            config = await self.db.config.find_one({"_id": "bot_config"})
+                            base_invite_points = config.get("point_rates", {}).get("invite", 2)
+                            
+                            # Get inviter's current role config
+                            inviter = ctx.guild.get_member(user_data["user_id"])
+                            bonus_points = 0
+                            
+                            if inviter and server and server.get("role_based"):
+                                role_config = await self.get_user_role_config(inviter, server)
+                                if role_config:
+                                    bonus_points = role_config.get("invite_bonus", 0)
+                            
+                            total_points = base_invite_points + bonus_points
+                            
+                            await self.db.users.update_one(
+                                {
+                                    "user_id": user_data["user_id"],
+                                    "invited_users.user_id": member_id
+                                },
+                                {
+                                    "$set": {"invited_users.$.verified": True},
+                                    "$inc": {
+                                        "pending_invites": -1,
+                                        "verified_invites": 1,
+                                        "points": total_points,
+                                        "total_earned": total_points
                                     }
-                                )
-                                synced += 1
+                                }
+                            )
+                            synced += 1
             
             embed = discord.Embed(
                 title="✅ Invite Sync Complete",

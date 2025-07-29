@@ -1,3 +1,7 @@
+# cogs/admin.py
+# Location: cogs/admin.py
+# Description: Updated admin module with enhanced role management and new DB structure
+
 import discord
 from discord.ext import commands
 from discord import app_commands
@@ -10,8 +14,6 @@ class AdminCog(commands.Cog):
         self.bot = bot
         self.db = bot.db
 
-    
-        
     async def is_owner(self, user_id: int) -> bool:
         config = await self.db.config.find_one({"_id": "bot_config"})
         return user_id == config.get("owner_id")
@@ -20,6 +22,68 @@ class AdminCog(commands.Cog):
         cookie_cog = self.bot.get_cog("CookieCog")
         if cookie_cog:
             await cookie_cog.log_action(guild_id, message, color)
+    
+    async def get_or_create_user(self, user_id: int, username: str):
+        user = await self.db.users.find_one({"user_id": user_id})
+        if not user:
+            user = {
+                "user_id": user_id,
+                "username": username,
+                "points": 0,
+                "total_earned": 0,
+                "total_spent": 0,
+                "trust_score": 50,
+                "account_created": datetime.now(timezone.utc),
+                "first_seen": datetime.now(timezone.utc),
+                "last_active": datetime.now(timezone.utc),
+                "daily_claimed": None,
+                "invite_count": 0,
+                "invited_users": [],
+                "pending_invites": 0,
+                "verified_invites": 0,
+                "fake_invites": 0,
+                "last_claim": None,
+                "cookie_claims": {},
+                "daily_claims": {},
+                "weekly_claims": 0,
+                "total_claims": 0,
+                "blacklisted": False,
+                "blacklist_expires": None,
+                "preferences": {
+                    "dm_notifications": True,
+                    "claim_confirmations": True,
+                    "feedback_reminders": True
+                },
+                "statistics": {
+                    "feedback_streak": 0,
+                    "perfect_ratings": 0,
+                    "favorite_cookie": None,
+                    "divine_gambles": 0,
+                    "divine_wins": 0,
+                    "divine_losses": 0,
+                    "rob_wins": 0,
+                    "rob_losses": 0,
+                    "rob_winnings": 0,
+                    "rob_losses_amount": 0,
+                    "times_robbed": 0,
+                    "amount_stolen_from": 0,
+                    "slots_played": 0,
+                    "slots_won": 0,
+                    "slots_lost": 0,
+                    "slots_profit": 0,
+                    "slots_biggest_win": 0,
+                    "slots_current_streak": 0,
+                    "slots_best_streak": 0
+                },
+                "game_stats": {
+                    "slots": {"played": 0, "won": 0, "profit": 0},
+                    "bet": {"played": 0, "won": 0, "profit": 0},
+                    "rob": {"attempts": 0, "successes": 0, "profit": 0},
+                    "gamble": {"attempts": 0, "wins": 0}
+                }
+            }
+            await self.db.users.insert_one(user)
+        return user
 
     @commands.hybrid_command(name="givepoints", description="Give or remove points from a user")
     @app_commands.describe(
@@ -38,29 +102,7 @@ class AdminCog(commands.Cog):
                 await ctx.send(embed=embed, ephemeral=True)
                 return
             
-            user_data = await self.db.users.find_one({"user_id": user.id})
-            if not user_data:
-                user_data = {
-                    "user_id": user.id,
-                    "username": str(user),
-                    "points": 0,
-                    "total_earned": 0,
-                    "total_spent": 0,
-                    "trust_score": 50,
-                    "account_created": datetime.now(timezone.utc),
-                    "first_seen": datetime.now(timezone.utc),
-                    "last_active": datetime.now(timezone.utc),
-                    "daily_claimed": None,
-                    "invite_count": 0,
-                    "last_claim": None,
-                    "cookie_claims": {},
-                    "weekly_claims": 0,
-                    "total_claims": 0,
-                    "blacklisted": False,
-                    "blacklist_expires": None
-                }
-                await self.db.users.insert_one(user_data)
-            
+            user_data = await self.get_or_create_user(user.id, str(user))
             current_points = user_data.get("points", 0)
             
             if points > 0:
@@ -70,7 +112,8 @@ class AdminCog(commands.Cog):
                         "$inc": {
                             "points": points,
                             "total_earned": points
-                        }
+                        },
+                        "$set": {"last_active": datetime.now(timezone.utc)}
                     }
                 )
                 action = "Added"
@@ -80,7 +123,8 @@ class AdminCog(commands.Cog):
                 await self.db.users.update_one(
                     {"user_id": user.id},
                     {
-                        "$inc": {"points": points}
+                        "$inc": {"points": points},
+                        "$set": {"last_active": datetime.now(timezone.utc)}
                     }
                 )
                 action = "Removed"
@@ -137,6 +181,23 @@ class AdminCog(commands.Cog):
                 await ctx.send(embed=embed, ephemeral=True)
                 return
             
+            server = await self.db.servers.find_one({"server_id": ctx.guild.id})
+            role_info = "Default"
+            
+            if server and server.get("role_based"):
+                best_role = None
+                highest_position = -1
+                
+                for role in user.roles:
+                    role_config = server.get("roles", {}).get(str(role.id))
+                    if role_config and isinstance(role_config, dict):
+                        if role.position > highest_position:
+                            highest_position = role.position
+                            best_role = role_config
+                
+                if best_role:
+                    role_info = f"{best_role.get('name', 'Unknown')} (×{best_role.get('trust_multiplier', 1.0)} trust)"
+            
             embed = discord.Embed(
                 title=f"💰 Points Analysis: {user.display_name}",
                 color=discord.Color.blue(),
@@ -152,6 +213,18 @@ class AdminCog(commands.Cog):
             embed.add_field(name="💹 Net Profit", value=f"**{net_profit:,}**", inline=True)
             embed.add_field(name="🏆 Trust Score", value=f"**{user_data.get('trust_score', 50)}/100**", inline=True)
             embed.add_field(name="🍪 Total Claims", value=f"**{user_data.get('total_claims', 0):,}**", inline=True)
+            
+            embed.add_field(name="🎭 Active Role", value=role_info, inline=False)
+            
+            # Show game stats
+            game_stats = user_data.get("game_stats", {})
+            game_text = []
+            if game_stats.get("slots", {}).get("played", 0) > 0:
+                game_text.append(f"Slots: {game_stats['slots']['won']}/{game_stats['slots']['played']} wins")
+            if game_stats.get("rob", {}).get("attempts", 0) > 0:
+                game_text.append(f"Rob: {game_stats['rob']['successes']}/{game_stats['rob']['attempts']} success")
+            if game_text:
+                embed.add_field(name="🎮 Game Stats", value="\n".join(game_text), inline=False)
             
             if user_data.get('blacklisted'):
                 expires = user_data.get('blacklist_expires')
@@ -188,7 +261,12 @@ class AdminCog(commands.Cog):
             
             await self.db.config.update_one(
                 {"_id": "bot_config"},
-                {"$set": {"maintenance_mode": mode}}
+                {
+                    "$set": {
+                        "maintenance_mode": mode,
+                        "maintenance_started": datetime.now(timezone.utc) if mode else None
+                    }
+                }
             )
             
             if mode:
@@ -247,6 +325,13 @@ class AdminCog(commands.Cog):
                 await ctx.send("❌ I cannot blacklist myself!", ephemeral=True)
                 return
             
+            server = await self.db.servers.find_one({"server_id": ctx.guild.id})
+            if server:
+                settings = server.get("settings", {})
+                max_blacklist_days = settings.get("max_blacklist_days", 365)
+                if days > max_blacklist_days:
+                    days = max_blacklist_days
+            
             if days > 0:
                 expire_date = datetime.now(timezone.utc) + timedelta(days=days)
                 duration_text = f"**{days}** days"
@@ -259,7 +344,10 @@ class AdminCog(commands.Cog):
                 {
                     "$set": {
                         "blacklisted": True,
-                        "blacklist_expires": expire_date
+                        "blacklist_expires": expire_date,
+                        "blacklist_reason": "Admin action",
+                        "blacklisted_by": ctx.author.id,
+                        "blacklisted_at": datetime.now(timezone.utc)
                     }
                 },
                 upsert=True
@@ -296,6 +384,15 @@ class AdminCog(commands.Cog):
                 await user.send(embed=dm_embed)
             except:
                 pass
+            
+            # Check if user has blacklist role
+            if server and server.get("roles"):
+                for role_id, role_config in server["roles"].items():
+                    if isinstance(role_config, dict) and role_config.get("name") == "blacklist":
+                        blacklist_role = ctx.guild.get_role(int(role_id))
+                        if blacklist_role and blacklist_role not in user.roles:
+                            await user.add_roles(blacklist_role)
+                        break
             
             await self.log_action(
                 ctx.guild.id,
@@ -336,6 +433,11 @@ class AdminCog(commands.Cog):
                         "blacklisted": False,
                         "blacklist_expires": None,
                         "last_claim.feedback_given": True
+                    },
+                    "$unset": {
+                        "blacklist_reason": "",
+                        "blacklisted_by": "",
+                        "blacklisted_at": ""
                     }
                 }
             )
@@ -352,6 +454,16 @@ class AdminCog(commands.Cog):
             embed.set_footer(text=f"Unblacklisted by {ctx.author}")
             
             await ctx.send(embed=embed)
+            
+            # Remove blacklist role if exists
+            server = await self.db.servers.find_one({"server_id": ctx.guild.id})
+            if server and server.get("roles"):
+                for role_id, role_config in server["roles"].items():
+                    if isinstance(role_config, dict) and role_config.get("name") == "blacklist":
+                        blacklist_role = ctx.guild.get_role(int(role_id))
+                        if blacklist_role and blacklist_role in user.roles:
+                            await user.remove_roles(blacklist_role)
+                        break
             
             try:
                 dm_embed = discord.Embed(
@@ -391,6 +503,7 @@ class AdminCog(commands.Cog):
             blacklisted_users = await self.db.users.count_documents({"blacklisted": True})
             total_servers = await self.db.servers.count_documents({})
             active_servers = await self.db.servers.count_documents({"enabled": True})
+            setup_complete_servers = await self.db.servers.count_documents({"setup_complete": True})
             
             # Points statistics
             points_pipeline = [
@@ -411,7 +524,10 @@ class AdminCog(commands.Cog):
             # Global statistics
             stats = await self.db.statistics.find_one({"_id": "global_stats"})
             if not stats:
-                stats = {"all_time_claims": 0, "total_claims": {}}
+                stats = {"all_time_claims": 0, "total_claims": {}, "game_stats": {}}
+            
+            # Game statistics
+            game_stats = stats.get("game_stats", {})
             
             # Create main embed
             embed = discord.Embed(
@@ -434,6 +550,7 @@ class AdminCog(commands.Cog):
                 name="🏢 Server Statistics",
                 value=f"Total Servers: **{total_servers}**\n"
                       f"Active Servers: **{active_servers}**\n"
+                      f"Setup Complete: **{setup_complete_servers}**\n"
                       f"Connected: **{len(self.bot.guilds)}**",
                 inline=True
             )
@@ -467,6 +584,25 @@ class AdminCog(commands.Cog):
                 inline=False
             )
             
+            # Game Statistics
+            if game_stats:
+                game_text = []
+                if game_stats.get("slots_played", 0) > 0:
+                    game_text.append(f"Slots: **{game_stats.get('slots_played', 0):,}** played")
+                if game_stats.get("bets_created", 0) > 0:
+                    game_text.append(f"Bets: **{game_stats.get('bets_created', 0):,}** created")
+                if game_stats.get("rob_attempts", 0) > 0:
+                    game_text.append(f"Robs: **{game_stats.get('rob_attempts', 0):,}** attempts")
+                if game_stats.get("divine_gambles", 0) > 0:
+                    game_text.append(f"Divine: **{game_stats.get('divine_gambles', 0):,}** gambles")
+                
+                if game_text:
+                    embed.add_field(
+                        name="🎮 Game Statistics",
+                        value="\n".join(game_text),
+                        inline=False
+                    )
+            
             # Top cookies
             if stats.get("total_claims"):
                 top_cookies = sorted(stats["total_claims"].items(), key=lambda x: x[1], reverse=True)[:5]
@@ -476,7 +612,7 @@ class AdminCog(commands.Cog):
                     embed.add_field(name="🏆 Top Cookies", value=cookie_text, inline=False)
             
             # Memory usage
-            embed.set_footer(text=f"Bot Version: 2.0 | Python {discord.__version__}")
+            embed.set_footer(text=f"Bot Version: 2.1 | Python {discord.__version__}")
             
             await ctx.send(embed=embed)
             
@@ -597,6 +733,97 @@ class AdminCog(commands.Cog):
         except Exception as e:
             print(f"Error in broadcast: {traceback.format_exc()}")
             await ctx.send("❌ An error occurred during broadcast!", ephemeral=True)
+    
+    @commands.hybrid_command(name="setrole", description="Configure role benefits")
+    @app_commands.describe(
+        role="The role to configure",
+        daily_bonus="Daily bonus points",
+        trust_multiplier="Trust score multiplier"
+    )
+    async def setrole(self, ctx, role: discord.Role, daily_bonus: int = 0, trust_multiplier: float = 1.0):
+        try:
+            if not await self.is_owner(ctx.author.id):
+                embed = discord.Embed(
+                    title="🔒 Access Denied",
+                    description="This command is restricted to the bot owner only!",
+                    color=discord.Color.red()
+                )
+                await ctx.send(embed=embed, ephemeral=True)
+                return
+            
+            server = await self.db.servers.find_one({"server_id": ctx.guild.id})
+            if not server:
+                await ctx.send("❌ Server not configured! Run /setup first.", ephemeral=True)
+                return
+            
+            # Get default role template
+            config = await self.db.config.find_one({"_id": "bot_config"})
+            default_roles = config.get("default_roles", {})
+            
+            # Try to match with a default role type
+            role_type = None
+            for default_type, default_config in default_roles.items():
+                if default_type.lower() in role.name.lower():
+                    role_type = default_type
+                    break
+            
+            if role_type:
+                # Use template with custom overrides
+                role_config = default_roles[role_type].copy()
+                role_config["daily_bonus"] = daily_bonus
+                role_config["trust_multiplier"] = trust_multiplier
+            else:
+                # Create custom configuration
+                role_config = {
+                    "name": role.name,
+                    "description": f"Custom role configuration",
+                    "emoji": "🎭",
+                    "daily_bonus": daily_bonus,
+                    "trust_multiplier": trust_multiplier,
+                    "game_benefits": {
+                        "slots_max_bet_bonus": 0,
+                        "rob_success_bonus": 0,
+                        "bet_profit_multiplier": 1.0
+                    },
+                    "cookie_access": {}
+                }
+            
+            await self.db.servers.update_one(
+                {"server_id": ctx.guild.id},
+                {
+                    "$set": {
+                        f"roles.{role.id}": role_config,
+                        "role_based": True
+                    }
+                }
+            )
+            
+            embed = discord.Embed(
+                title="🎭 Role Configured",
+                description=f"Successfully configured {role.mention}",
+                color=role.color
+            )
+            embed.add_field(name="Daily Bonus", value=f"{daily_bonus} points", inline=True)
+            embed.add_field(name="Trust Multiplier", value=f"{trust_multiplier}x", inline=True)
+            
+            if role_type:
+                embed.add_field(
+                    name="Template Applied",
+                    value=f"Using **{role_type}** template with cookie access",
+                    inline=False
+                )
+            
+            await ctx.send(embed=embed)
+            
+            await self.log_action(
+                ctx.guild.id,
+                f"🎭 {ctx.author.mention} configured role {role.mention} with {daily_bonus} daily bonus and {trust_multiplier}x trust",
+                discord.Color.blue()
+            )
+            
+        except Exception as e:
+            print(f"Error in setrole: {e}")
+            await ctx.send("❌ An error occurred!", ephemeral=True)
     
     def get_uptime(self):
         delta = datetime.now(timezone.utc) - self.bot.start_time
