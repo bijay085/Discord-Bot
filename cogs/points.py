@@ -1,12 +1,10 @@
 # cogs/points.py
-# Location: cogs/points.py
-# Description: Points system with fixed daily command timezone handling
-
 import discord
 from discord.ext import commands
 from discord import app_commands
 from datetime import datetime, timedelta, timezone
 import traceback
+from typing import Optional
 
 class PointsCog(commands.Cog):
     def __init__(self, bot):
@@ -30,10 +28,21 @@ class PointsCog(commands.Cog):
                 "invite_count": 0,
                 "last_claim": None,
                 "cookie_claims": {},
+                "daily_claims": {},  # For cookie daily limits
                 "weekly_claims": 0,
                 "total_claims": 0,
                 "blacklisted": False,
-                "blacklist_expires": None
+                "blacklist_expires": None,
+                "preferences": {
+                    "dm_notifications": True,
+                    "claim_confirmations": True,
+                    "feedback_reminders": True
+                },
+                "statistics": {
+                    "feedback_streak": 0,
+                    "perfect_ratings": 0,
+                    "favorite_cookie": None
+                }
             }
             await self.db.users.insert_one(user)
         else:
@@ -48,7 +57,30 @@ class PointsCog(commands.Cog):
         if cookie_cog:
             await cookie_cog.log_action(guild_id, message, color)
     
-    @commands.hybrid_command(name="daily", description="Claim your daily points")
+    async def get_user_role_config(self, member: discord.Member, server: dict) -> dict:
+        """Get the best role configuration for a user based on role hierarchy"""
+        if not server.get("role_based"):
+            return {}
+            
+        best_config = {}
+        highest_priority = -1
+        
+        # Get fresh server data to ensure we have latest role configs
+        server = await self.db.servers.find_one({"server_id": member.guild.id})
+        if not server or not server.get("roles"):
+            return {}
+        
+        for role in member.roles:
+            role_config = server["roles"].get(str(role.id))
+            if role_config and isinstance(role_config, dict):
+                # Check if this role has better priority (position in hierarchy)
+                if role.position > highest_priority:
+                    highest_priority = role.position
+                    best_config = role_config
+        
+        return best_config
+    
+    @commands.hybrid_command(name="daily", description="Claim your daily points with role bonuses")
     async def daily(self, ctx):
         try:
             server = await self.db.servers.find_one({"server_id": ctx.guild.id})
@@ -96,20 +128,40 @@ class PointsCog(commands.Cog):
                     return
             
             config = await self.db.config.find_one({"_id": "bot_config"})
-            daily_points = config["point_rates"]["daily"]
+            base_daily_points = config["point_rates"]["daily"]
+            
+            # Get role bonus
+            role_config = await self.get_user_role_config(ctx.author, server)
+            role_bonus = 0
+            role_name = None
+            trust_multiplier = 1.0
+            
+            if role_config:
+                role_bonus = role_config.get("daily_bonus", 0)
+                role_name = role_config.get("name", "Unknown")
+                trust_multiplier = role_config.get("trust_multiplier", 1.0)
+            
+            total_daily_points = base_daily_points + role_bonus
+            
+            # Apply trust multiplier if enabled
+            if server.get("settings", {}).get("trust_affects_daily", False) and trust_multiplier > 1.0:
+                bonus_from_trust = int((total_daily_points * trust_multiplier) - total_daily_points)
+                total_daily_points = int(total_daily_points * trust_multiplier)
+            else:
+                bonus_from_trust = 0
             
             await self.db.users.update_one(
                 {"user_id": ctx.author.id},
                 {
                     "$set": {"daily_claimed": datetime.now(timezone.utc)},
                     "$inc": {
-                        "points": daily_points,
-                        "total_earned": daily_points
+                        "points": total_daily_points,
+                        "total_earned": total_daily_points
                     }
                 }
             )
             
-            new_points = user_data["points"] + daily_points
+            new_points = user_data["points"] + total_daily_points
             
             embed = discord.Embed(
                 title="✅ Daily Points Claimed!",
@@ -117,16 +169,30 @@ class PointsCog(commands.Cog):
                 color=discord.Color.green(),
                 timestamp=datetime.now(timezone.utc)
             )
-            embed.add_field(name="Reward", value=f"**+{daily_points}** points", inline=True)
-            embed.add_field(name="New Balance", value=f"**{new_points}** points", inline=True)
-            embed.add_field(name="Next Daily", value="Available tomorrow at midnight UTC", inline=True)
-            embed.set_footer(text=f"Total earned: {user_data['total_earned'] + daily_points} points")
+            
+            # Show breakdown
+            embed.add_field(name="🎁 Base Daily", value=f"{base_daily_points} points", inline=True)
+            
+            if role_bonus > 0:
+                embed.add_field(name="🎭 Role Bonus", value=f"+{role_bonus} points", inline=True)
+            
+            if bonus_from_trust > 0:
+                embed.add_field(name="✨ Trust Bonus", value=f"+{bonus_from_trust} points", inline=True)
+            
+            embed.add_field(name="💰 Total Reward", value=f"**{total_daily_points}** points", inline=False)
+            embed.add_field(name="💳 New Balance", value=f"**{new_points}** points", inline=True)
+            embed.add_field(name="⏰ Next Daily", value="Available tomorrow at midnight UTC", inline=True)
+            
+            if role_name:
+                embed.set_footer(text=f"Claimed with {role_name} benefits • Total earned: {user_data['total_earned'] + total_daily_points} points")
+            else:
+                embed.set_footer(text=f"Total earned: {user_data['total_earned'] + total_daily_points} points")
             
             await ctx.send(embed=embed, ephemeral=True)
             
             await self.log_action(
                 ctx.guild.id,
-                f"💰 {ctx.author.mention} claimed daily points [+{daily_points}]",
+                f"💰 {ctx.author.mention} claimed daily points [+{total_daily_points}] [Role: {role_name or 'None'}]",
                 discord.Color.green()
             )
         except Exception as e:
@@ -144,6 +210,12 @@ class PointsCog(commands.Cog):
             target = user or ctx.author
             user_data = await self.get_or_create_user(target.id, str(target))
             
+            # Get server and role information
+            server = await self.db.servers.find_one({"server_id": ctx.guild.id})
+            role_config = None
+            if server and server.get("role_based"):
+                role_config = await self.get_user_role_config(target, server)
+            
             embed = discord.Embed(
                 title=f"💰 {target.display_name}'s Account",
                 color=discord.Color.blue(),
@@ -155,16 +227,73 @@ class PointsCog(commands.Cog):
             embed.add_field(name="Total Earned", value=f"**{user_data.get('total_earned', 0):,}**", inline=True)
             embed.add_field(name="Total Spent", value=f"**{user_data.get('total_spent', 0):,}**", inline=True)
             
-            trust_emoji = "🟢" if user_data.get('trust_score', 50) >= 80 else "🟡" if user_data.get('trust_score', 50) >= 50 else "🔴"
-            embed.add_field(name="Trust Score", value=f"{trust_emoji} **{user_data.get('trust_score', 50)}/100**", inline=True)
+            # Apply trust multiplier for display
+            trust_score = user_data.get('trust_score', 50)
+            if role_config and role_config.get('trust_multiplier', 1.0) > 1.0:
+                effective_trust = min(100, trust_score * role_config['trust_multiplier'])
+                trust_display = f"**{trust_score}** (×{role_config['trust_multiplier']} = {effective_trust:.1f})"
+            else:
+                trust_display = f"**{trust_score}/100**"
+                
+            trust_emoji = "🟢" if trust_score >= 80 else "🟡" if trust_score >= 50 else "🔴"
+            embed.add_field(name="Trust Score", value=f"{trust_emoji} {trust_display}", inline=True)
             embed.add_field(name="Total Claims", value=f"**{user_data.get('total_claims', 0):,}**", inline=True)
             embed.add_field(name="This Week", value=f"**{user_data.get('weekly_claims', 0):,}**", inline=True)
+            
+            # Show role benefits
+            if role_config:
+                embed.add_field(
+                    name="🎭 Active Role",
+                    value=f"**{role_config.get('name', 'Unknown')}**",
+                    inline=True
+                )
+                
+                if role_config.get('daily_bonus', 0) > 0:
+                    embed.add_field(
+                        name="🎁 Daily Bonus",
+                        value=f"+{role_config['daily_bonus']} points",
+                        inline=True
+                    )
+                
+                # Count accessible cookies
+                accessible = 0
+                if "cookie_access" in role_config:
+                    for cookie, access in role_config["cookie_access"].items():
+                        if access.get("enabled", False):
+                            accessible += 1
+                    embed.add_field(
+                        name="🍪 Cookie Access",
+                        value=f"{accessible} types",
+                        inline=True
+                    )
             
             if user_data.get("cookie_claims"):
                 top_cookies = sorted(user_data["cookie_claims"].items(), key=lambda x: x[1], reverse=True)[:3]
                 if top_cookies:
                     fav_text = "\n".join([f"{idx+1}. **{cookie}**: {count}" for idx, (cookie, count) in enumerate(top_cookies)])
                     embed.add_field(name="🍪 Favorite Cookies", value=fav_text, inline=False)
+            
+            # Show daily claim status
+            if user_data.get("daily_claimed"):
+                daily_claimed = user_data["daily_claimed"]
+                if daily_claimed.tzinfo is None:
+                    daily_claimed = daily_claimed.replace(tzinfo=timezone.utc)
+                    
+                now = datetime.now(timezone.utc)
+                tomorrow = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+                
+                if daily_claimed.date() == now.date():
+                    embed.add_field(
+                        name="📅 Daily Status",
+                        value=f"✅ Claimed today\nNext: <t:{int(tomorrow.timestamp())}:R>",
+                        inline=True
+                    )
+                else:
+                    embed.add_field(
+                        name="📅 Daily Status",
+                        value="❌ Not claimed today\nUse `/daily` now!",
+                        inline=True
+                    )
             
             account_created = user_data.get('account_created', user_data.get('first_seen', datetime.now(timezone.utc)))
             if isinstance(account_created, datetime):
@@ -183,6 +312,7 @@ class PointsCog(commands.Cog):
     async def getpoints(self, ctx):
         try:
             config = await self.db.config.find_one({"_id": "bot_config"})
+            server = await self.db.servers.find_one({"server_id": ctx.guild.id})
             
             embed = discord.Embed(
                 title="💰 How to Earn Points",
@@ -192,9 +322,10 @@ class PointsCog(commands.Cog):
             )
             embed.set_thumbnail(url=self.bot.user.avatar.url)
             
+            # Base methods
             embed.add_field(
                 name="🎁 Daily Rewards",
-                value=f"`/daily` - Get **{config['point_rates']['daily']}** points every 24 hours",
+                value=f"`/daily` - Get **{config['point_rates']['daily']}** base points every 24 hours",
                 inline=False
             )
             
@@ -205,19 +336,49 @@ class PointsCog(commands.Cog):
                 inline=False
             )
             
+            # Role bonuses
+            if server and server.get("role_based") and server.get("roles"):
+                role_bonuses = []
+                for role_id, role_config in server["roles"].items():
+                    if isinstance(role_config, dict) and role_config.get("daily_bonus", 0) > 0:
+                        role_name = role_config.get("name", "Unknown")
+                        daily_bonus = role_config["daily_bonus"]
+                        role_bonuses.append(f"• **{role_name}**: +{daily_bonus} daily bonus")
+                
+                if role_bonuses:
+                    embed.add_field(
+                        name="🎭 Role Daily Bonuses",
+                        value="\n".join(role_bonuses[:5]),
+                        inline=False
+                    )
+            
             embed.add_field(
                 name="🚀 Server Boost",
-                value="Boost the server - Get special role with **FREE** cookies!",
+                value="Boost the server - Get special role with amazing benefits!",
                 inline=False
             )
             
             embed.add_field(
-                name="💎 Special Roles",
+                name="🎮 Play Games",
                 value=(
-                    "• **Free Role**: Default costs\n"
-                    "• **Premium Role**: Reduced costs\n"
-                    "• **VIP Role**: Very low costs\n"
-                    "• **Booster Role**: FREE cookies!"
+                    "• **Slots**: Win up to 50x your bet\n"
+                    "• **Betting**: Win number guessing games\n"
+                    "• **Robbing**: Steal from others (risky!)\n"
+                    "• **Giveaways**: Join point giveaways"
+                ),
+                inline=False
+            )
+            
+            embed.add_field(
+                name="💎 Special Roles Benefits",
+                value=(
+                    "Higher roles get:\n"
+                    "• Daily bonus points\n"
+                    "• Lower cookie costs\n"
+                    "• Reduced cooldowns\n"
+                    "• Higher daily limits\n"
+                    "• Trust multipliers\n"
+                    "• Game bonuses"
                 ),
                 inline=False
             )
@@ -253,6 +414,11 @@ class PointsCog(commands.Cog):
                 await ctx.send(embed=embed, ephemeral=True)
                 return
             
+            server = await self.db.servers.find_one({"server_id": ctx.guild.id})
+            role_config = None
+            if server and server.get("role_based"):
+                role_config = await self.get_user_role_config(user, server)
+            
             status_color = discord.Color.red() if user_data.get("blacklisted") else discord.Color.green()
             status_emoji = "🚫" if user_data.get("blacklisted") else "✅"
             
@@ -281,6 +447,28 @@ class PointsCog(commands.Cog):
             else:
                 embed.add_field(name="Status", value=f"{status_emoji} **Active**", inline=False)
             
+            # Role information
+            if role_config:
+                embed.add_field(
+                    name="🎭 Active Role",
+                    value=f"**{role_config.get('name', 'Unknown')}**",
+                    inline=True
+                )
+                
+                # Show role perks
+                perks = []
+                if role_config.get("daily_bonus", 0) > 0:
+                    perks.append(f"Daily: +{role_config['daily_bonus']}")
+                if role_config.get("trust_multiplier", 1.0) > 1.0:
+                    perks.append(f"Trust: ×{role_config['trust_multiplier']}")
+                
+                if perks:
+                    embed.add_field(
+                        name="✨ Role Perks",
+                        value=" | ".join(perks),
+                        inline=True
+                    )
+            
             embed.add_field(name="💰 Points", value=f"**{user_data.get('points', 0):,}**", inline=True)
             embed.add_field(name="🍪 Total Claims", value=f"**{user_data.get('total_claims', 0):,}**", inline=True)
             embed.add_field(name="👥 Invites", value=f"**{user_data.get('invite_count', 0):,}**", inline=True)
@@ -289,6 +477,20 @@ class PointsCog(commands.Cog):
             embed.add_field(name="🏆 Trust Score", value=f"{trust_emoji} **{user_data.get('trust_score', 50)}/100**", inline=True)
             embed.add_field(name="📈 Total Earned", value=f"**{user_data.get('total_earned', 0):,}**", inline=True)
             embed.add_field(name="📉 Total Spent", value=f"**{user_data.get('total_spent', 0):,}**", inline=True)
+            
+            # Daily claims breakdown
+            if user_data.get("daily_claims"):
+                daily_text = []
+                for cookie_type, claim_data in list(user_data["daily_claims"].items())[:3]:
+                    count = claim_data.get("count", 0)
+                    daily_text.append(f"**{cookie_type}**: {count} today")
+                
+                if daily_text:
+                    embed.add_field(
+                        name="📅 Today's Claims",
+                        value="\n".join(daily_text),
+                        inline=False
+                    )
             
             if user_data.get("last_claim"):
                 last_claim = user_data["last_claim"]
@@ -314,6 +516,7 @@ class PointsCog(commands.Cog):
     async def help_command(self, ctx):
         try:
             config = await self.db.config.find_one({"_id": "bot_config"})
+            server = await self.db.servers.find_one({"server_id": ctx.guild.id})
             
             embed = discord.Embed(
                 title="🍪 Cookie Bot Help",
@@ -326,13 +529,14 @@ class PointsCog(commands.Cog):
             embed.add_field(
                 name="📍 Basic Commands",
                 value=(
-                    "`/cookie <type>` - Claim a cookie\n"
-                    "`/daily` - Get daily points\n"
+                    "`/cookie <type>` - Claim a cookie (role-based access)\n"
+                    "`/daily` - Get daily points + role bonus\n"
                     "`/points` - Check your balance\n"
                     "`/status [@user]` - Check detailed status\n"
                     "`/stock [type]` - Check cookie stock\n"
                     "`/getpoints` - How to earn points\n"
                     "`/feedback` - Submit feedback\n"
+                    "`/refresh` - Refresh role benefits\n"
                     "`/help` - Show this message"
                 ),
                 inline=False
@@ -341,6 +545,7 @@ class PointsCog(commands.Cog):
             embed.add_field(
                 name="🍪 Cookie Types",
                 value=(
+                    "Access depends on your role:\n"
                     "• **Streaming**: netflix, prime, jiohotstar, peacock, canalplus\n"
                     "• **Music**: spotify, crunchyroll\n"
                     "• **Premium**: tradingview, chatgpt, claude"
@@ -354,18 +559,36 @@ class PointsCog(commands.Cog):
                     "• Submit feedback within **15 minutes**\n"
                     "• Post screenshot in feedback channel\n"
                     "• No feedback = **30 day blacklist**\n"
-                    "• Enable DMs to receive cookies"
+                    "• Enable DMs to receive cookies\n"
+                    "• Daily limits apply per cookie type"
                 ),
                 inline=False
             )
             
+            # Show role hierarchy if enabled
+            if server and server.get("role_based") and server.get("roles"):
+                role_list = []
+                for role_id, role_config in server["roles"].items():
+                    if isinstance(role_config, dict):
+                        role_name = role_config.get("name", "Unknown")
+                        daily_bonus = role_config.get("daily_bonus", 0)
+                        role_list.append(f"• **{role_name}**: +{daily_bonus} daily")
+                
+                if role_list:
+                    embed.add_field(
+                        name="💎 Role Benefits",
+                        value="\n".join(role_list[:5]) + ("\n*And more...*" if len(role_list) > 5 else ""),
+                        inline=False
+                    )
+            
             embed.add_field(
-                name="💎 Role Benefits",
+                name="🎮 Game Commands",
                 value=(
-                    "• **Free**: Default prices & cooldowns\n"
-                    "• **Premium**: Lower costs & faster cooldowns\n"
-                    "• **VIP**: Very low costs & minimal cooldowns\n"
-                    "• **Booster**: FREE cookies & no cooldowns!"
+                    "`/games` - View all games guide\n"
+                    "`/slots play` - Play slot machine\n"
+                    "`/bet` - Start betting game\n"
+                    "`/rob` - Rob another user\n"
+                    "`/gamble divine` - Ultimate risk"
                 ),
                 inline=False
             )
@@ -405,6 +628,20 @@ class PointsCog(commands.Cog):
                     update_fields['weekly_claims'] = 0
                 if 'cookie_claims' not in user:
                     update_fields['cookie_claims'] = {}
+                if 'daily_claims' not in user:
+                    update_fields['daily_claims'] = {}
+                if 'preferences' not in user:
+                    update_fields['preferences'] = {
+                        "dm_notifications": True,
+                        "claim_confirmations": True,
+                        "feedback_reminders": True
+                    }
+                if 'statistics' not in user:
+                    update_fields['statistics'] = {
+                        "feedback_streak": 0,
+                        "perfect_ratings": 0,
+                        "favorite_cookie": None
+                    }
                 
                 if update_fields:
                     await self.db.users.update_one(

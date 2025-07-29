@@ -9,6 +9,8 @@ class AdminCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.db = bot.db
+
+    
         
     async def is_owner(self, user_id: int) -> bool:
         config = await self.db.config.find_one({"_id": "bot_config"})
