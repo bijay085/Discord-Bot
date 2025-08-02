@@ -79,7 +79,7 @@ class InviteCog(commands.Cog):
         self.invite_cache_update.start()
         self.pending_rewards = {}
         self.tracked_members = {}
-        self.cleanup_tracked_members.start()  # ADD THIS LINE
+        self.cleanup_tracked_members.start()
         
     async def cog_unload(self):
         self.invite_cache_update.cancel()
@@ -282,11 +282,12 @@ class InviteCog(commands.Cog):
                 embed.set_thumbnail(url=member.display_avatar.url)
                 embed.set_footer(text=f"Member #{guild.member_count}")
                 
-                await self.log_action(
+                # Use asyncio.create_task to avoid blocking
+                asyncio.create_task(self.log_action(
                     guild.id,
                     f"👋 {member.mention} joined using invite from {used_invite.inviter.mention} (Code: `{used_invite.code}`)",
                     discord.Color.blue()
-                )
+                ))
                 
                 if used_invite.inviter.id not in self.pending_rewards:
                     self.pending_rewards[used_invite.inviter.id] = []
@@ -405,11 +406,11 @@ class InviteCog(commands.Cog):
                         if role_name:
                             log_message += f" [Role: {role_name}]"
                         
-                        await self.log_action(
+                        asyncio.create_task(self.log_action(
                             after.guild.id,
                             log_message,
                             discord.Color.green()
-                        )
+                        ))
                         
                         try:
                             await inviter.send(embed=embed)
@@ -458,11 +459,11 @@ class InviteCog(commands.Cog):
                                     if role_name:
                                         log_message += f" [Role: {role_name}]"
                                     
-                                    await self.log_action(
+                                    asyncio.create_task(self.log_action(
                                         after.guild.id,
                                         log_message,
                                         discord.Color.green()
-                                    )
+                                    ))
                                 break
                 
                 if after.id in self.pending_rewards:
@@ -482,13 +483,26 @@ class InviteCog(commands.Cog):
             if member.bot:
                 return
             
+            # Get current time with timezone
+            current_time = datetime.now(timezone.utc)
+            
+            # Clean up tracked members
             if member.id in self.tracked_members:
                 del self.tracked_members[member.id]
             
+            # Find user who invited this member
             user_data = await self.db.users.find_one({"invited_users.user_id": member.id})
             if user_data:
                 for invited in user_data.get("invited_users", []):
                     if invited["user_id"] == member.id:
+                        # Ensure joined_at is timezone-aware
+                        joined_at = invited.get("joined_at", current_time)
+                        if isinstance(joined_at, datetime) and joined_at.tzinfo is None:
+                            joined_at = joined_at.replace(tzinfo=timezone.utc)
+                        
+                        # Calculate duration
+                        duration = current_time - joined_at
+                        
                         if invited.get("verified"):
                             await self.db.users.update_one(
                                 {"user_id": user_data["user_id"]},
@@ -512,25 +526,29 @@ class InviteCog(commands.Cog):
                                 title="👋 Invited Member Left",
                                 description=f"{member.name} left the server",
                                 color=discord.Color.orange(),
-                                timestamp=datetime.now(timezone.utc)
+                                timestamp=current_time
                             )
                             embed.add_field(name="Status", value="Not Verified" if not invited.get("verified") else "Was Verified", inline=True)
-                            embed.add_field(name="Stayed For", value=f"{(datetime.now(timezone.utc) - invited['joined_at']).days} days", inline=True)
+                            embed.add_field(name="Stayed For", value=f"{duration.days} days", inline=True)
                             
-                            await self.log_action(
+                            asyncio.create_task(self.log_action(
                                 member.guild.id,
                                 f"👋 {member.mention} left (Invited by {inviter.mention})",
                                 discord.Color.orange()
-                            )
+                            ))
                         break
                         
         except Exception as e:
-            print(f"Error in member remove: {e}")
+            print(f"Error in member remove: {type(e).__name__}: {e}")
+            import traceback
+            traceback.print_exc()
     
     @commands.hybrid_command(name="invites", description="Check invite statistics")
     @app_commands.describe(user="The user to check invites for (leave empty for yourself)")
     async def invites(self, ctx, user: Optional[discord.Member] = None):
         try:
+            await ctx.defer(ephemeral=True)
+            
             if user is None:
                 user = ctx.author
             
@@ -632,24 +650,26 @@ class InviteCog(commands.Cog):
             
             embed.set_footer(text=f"Base points per verified invite: {base_invite_points}")
             
-            await ctx.send(embed=embed, ephemeral=True)
+            await ctx.followup.send(embed=embed)
             
         except Exception as e:
             import traceback
             print(f"Error in invites command: {traceback.format_exc()}")
-            await ctx.send("❌ An error occurred!", ephemeral=True)
+            await ctx.followup.send("❌ An error occurred!")
     
     @commands.hybrid_command(name="inviteleaderboard", description="View the top inviters")
     async def inviteleaderboard(self, ctx):
         try:
+            await ctx.defer(ephemeral=False)
+            
             view = InviteLeaderboardView(self, ctx.guild.id)
             embed = await view.create_embed()
             
-            await ctx.send(embed=embed, view=view, ephemeral=False)
+            await ctx.followup.send(embed=embed, view=view)
             
         except Exception as e:
             print(f"Error in inviteleaderboard: {e}")
-            await ctx.send("❌ An error occurred!", ephemeral=True)
+            await ctx.followup.send("❌ An error occurred!")
     
     @commands.hybrid_command(name="createinvite", description="Create a tracked invite link")
     @app_commands.describe(
@@ -658,6 +678,8 @@ class InviteCog(commands.Cog):
     )
     async def createinvite(self, ctx, uses: int = 0, expires: int = 0):
         try:
+            await ctx.defer(ephemeral=True)
+            
             max_age = expires * 3600 if expires > 0 else 0
             
             invite = await ctx.channel.create_invite(
@@ -710,17 +732,19 @@ class InviteCog(commands.Cog):
             
             embed.set_footer(text=f"Created by {ctx.author}")
             
-            await ctx.send(embed=embed, ephemeral=True)
+            await ctx.followup.send(embed=embed)
             
         except Exception as e:
             print(f"Error creating invite: {e}")
-            await ctx.send("❌ Failed to create invite! Check my permissions.", ephemeral=True)
+            await ctx.followup.send("❌ Failed to create invite! Check my permissions.")
     
     @commands.hybrid_command(name="resetinvites", description="Reset invite count for a user (Admin only)")
     @app_commands.describe(user="The user to reset invites for")
     @commands.has_permissions(administrator=True)
     async def resetinvites(self, ctx, user: discord.Member):
         try:
+            await ctx.defer()
+            
             await self.db.users.update_one(
                 {"user_id": user.id},
                 {
@@ -742,17 +766,17 @@ class InviteCog(commands.Cog):
             )
             embed.set_footer(text=f"Reset by {ctx.author}")
             
-            await ctx.send(embed=embed)
+            await ctx.followup.send(embed=embed)
             
-            await self.log_action(
+            asyncio.create_task(self.log_action(
                 ctx.guild.id,
                 f"🔄 {ctx.author.mention} reset invites for {user.mention}",
                 discord.Color.orange()
-            )
+            ))
             
         except Exception as e:
             print(f"Error resetting invites: {e}")
-            await ctx.send("❌ An error occurred!", ephemeral=True)
+            await ctx.followup.send("❌ An error occurred!")
     
     @commands.hybrid_command(name="syncvites", description="Sync invite data from database (Owner only)")
     @commands.is_owner()
@@ -765,7 +789,7 @@ class InviteCog(commands.Cog):
             verified_role = ctx.guild.get_role(verified_role_id)
             
             if not verified_role:
-                await ctx.send("❌ Verified role not found!", ephemeral=True)
+                await ctx.followup.send("❌ Verified role not found!")
                 return
             
             synced = 0
@@ -812,11 +836,11 @@ class InviteCog(commands.Cog):
                 description=f"Synced **{synced}** pending invites that were already verified",
                 color=discord.Color.green()
             )
-            await ctx.send(embed=embed)
+            await ctx.followup.send(embed=embed)
             
         except Exception as e:
             print(f"Error syncing invites: {e}")
-            await ctx.send("❌ An error occurred!", ephemeral=True)
+            await ctx.followup.send("❌ An error occurred!")
 
 async def setup(bot):
     await bot.add_cog(InviteCog(bot))

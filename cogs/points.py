@@ -5,6 +5,7 @@ from discord import app_commands
 from datetime import datetime, timedelta, timezone
 import traceback
 from typing import Optional
+import asyncio
 
 class PointsCog(commands.Cog):
     def __init__(self, bot):
@@ -83,6 +84,9 @@ class PointsCog(commands.Cog):
     @commands.hybrid_command(name="daily", description="Claim your daily points with role bonuses")
     async def daily(self, ctx):
         try:
+            # Defer immediately to prevent interaction timeout
+            await ctx.defer(ephemeral=True)
+            
             server = await self.db.servers.find_one({"server_id": ctx.guild.id})
             if not server or not server.get("enabled"):
                 embed = discord.Embed(
@@ -91,7 +95,7 @@ class PointsCog(commands.Cog):
                     color=discord.Color.red()
                 )
                 embed.set_footer(text="Contact an admin to enable the bot")
-                await ctx.send(embed=embed, ephemeral=True)
+                await ctx.followup.send(embed=embed)
                 return
             
             user_data = await self.get_or_create_user(ctx.author.id, str(ctx.author))
@@ -127,7 +131,7 @@ class PointsCog(commands.Cog):
                     embed.add_field(name="Last Claimed", value=f"<t:{int(daily_claimed.timestamp())}:R>", inline=True)
                     embed.set_footer(text="Daily resets at midnight UTC!")
                     
-                    await ctx.send(embed=embed, ephemeral=True)
+                    await ctx.followup.send(embed=embed)
                     return
             
             config = await self.db.config.find_one({"_id": "bot_config"})
@@ -153,6 +157,7 @@ class PointsCog(commands.Cog):
             else:
                 bonus_from_trust = 0
             
+            # Update user data
             await self.db.users.update_one(
                 {"user_id": ctx.author.id},
                 {
@@ -191,13 +196,15 @@ class PointsCog(commands.Cog):
             else:
                 embed.set_footer(text=f"Total earned: {user_data['total_earned'] + total_daily_points} points")
             
-            await ctx.send(embed=embed, ephemeral=True)
+            await ctx.followup.send(embed=embed)
             
-            await self.log_action(
+            # Log action separately to avoid blocking
+            asyncio.create_task(self.log_action(
                 ctx.guild.id,
                 f"💰 {ctx.author.mention} claimed daily points [+{total_daily_points}] [Role: {role_name or 'None'}]",
                 discord.Color.green()
-            )
+            ))
+            
         except Exception as e:
             print(f"Error in daily command: {traceback.format_exc()}")
             embed = discord.Embed(
@@ -205,11 +212,13 @@ class PointsCog(commands.Cog):
                 description="An error occurred while claiming your daily points!",
                 color=discord.Color.red()
             )
-            await ctx.send(embed=embed, ephemeral=True)
+            await ctx.followup.send(embed=embed)
     
     @commands.hybrid_command(name="points", description="Check your points and stats")
     async def points(self, ctx, user: discord.Member = None):
         try:
+            await ctx.defer(ephemeral=True)
+            
             target = user or ctx.author
             user_data = await self.get_or_create_user(target.id, str(target))
             
@@ -304,16 +313,18 @@ class PointsCog(commands.Cog):
             else:
                 embed.set_footer(text="Account created: Unknown")
             
-            await ctx.send(embed=embed, ephemeral=True)
+            await ctx.followup.send(embed=embed)
         except Exception as e:
             print(f"Error in points command: {e}")
             import traceback
             print(traceback.format_exc())
-            await ctx.send("❌ An error occurred!", ephemeral=True)
+            await ctx.followup.send("❌ An error occurred!")
     
     @commands.hybrid_command(name="getpoints", description="Ways to earn points")
     async def getpoints(self, ctx):
         try:
+            await ctx.defer(ephemeral=True)
+            
             config = await self.db.config.find_one({"_id": "bot_config"})
             server = await self.db.servers.find_one({"server_id": ctx.guild.id})
             
@@ -395,15 +406,17 @@ class PointsCog(commands.Cog):
             main_invite = config.get("main_server_invite", "")
             embed.set_footer(text=f"Need help? Join: {main_invite}")
             
-            await ctx.send(embed=embed, ephemeral=True)
+            await ctx.followup.send(embed=embed)
         except Exception as e:
             print(f"Error in getpoints command: {e}")
-            await ctx.send("❌ An error occurred!", ephemeral=True)
+            await ctx.followup.send("❌ An error occurred!")
     
     @commands.hybrid_command(name="status", description="Check detailed user status")
     @app_commands.describe(user="The user to check status for (leave empty for yourself)")
     async def status(self, ctx, user: discord.Member = None):
         try:
+            await ctx.defer(ephemeral=True)
+            
             if user is None:
                 user = ctx.author
             
@@ -414,7 +427,7 @@ class PointsCog(commands.Cog):
                     description="This user hasn't used the bot yet!",
                     color=discord.Color.red()
                 )
-                await ctx.send(embed=embed, ephemeral=True)
+                await ctx.followup.send(embed=embed)
                 return
             
             server = await self.db.servers.find_one({"server_id": ctx.guild.id})
@@ -498,6 +511,8 @@ class PointsCog(commands.Cog):
             if user_data.get("last_claim"):
                 last_claim = user_data["last_claim"]
                 claim_date = last_claim.get('date', datetime.now(timezone.utc))
+                if isinstance(claim_date, datetime) and claim_date.tzinfo is None:
+                    claim_date = claim_date.replace(tzinfo=timezone.utc)
                 feedback_emoji = "✅" if last_claim.get("feedback_given") else "❌"
                 
                 embed.add_field(
@@ -510,14 +525,16 @@ class PointsCog(commands.Cog):
             
             embed.set_footer(text=f"User ID: {user.id} • Joined: {user_data.get('first_seen', datetime.now(timezone.utc)).strftime('%Y-%m-%d')}")
             
-            await ctx.send(embed=embed, ephemeral=True)
+            await ctx.followup.send(embed=embed)
         except Exception as e:
             print(f"Error in status command: {e}")
-            await ctx.send("❌ An error occurred!", ephemeral=True)
+            await ctx.followup.send("❌ An error occurred!")
     
     @commands.hybrid_command(name="help", description="Show all available commands")
     async def help_command(self, ctx):
         try:
+            await ctx.defer(ephemeral=True)
+            
             config = await self.db.config.find_one({"_id": "bot_config"})
             server = await self.db.servers.find_one({"server_id": ctx.guild.id})
             
@@ -599,10 +616,10 @@ class PointsCog(commands.Cog):
             main_invite = config.get("main_server_invite", "")
             embed.set_footer(text=f"Support Server: {main_invite}")
             
-            await ctx.send(embed=embed, ephemeral=True)
+            await ctx.followup.send(embed=embed)
         except Exception as e:
             print(f"Error in help command: {e}")
-            await ctx.send("❌ An error occurred!", ephemeral=True)
+            await ctx.followup.send("❌ An error occurred!")
 
     @commands.hybrid_command(name="fixusers", description="Fix missing user fields (Admin only)")
     @commands.has_permissions(administrator=True)
@@ -658,11 +675,11 @@ class PointsCog(commands.Cog):
                 description=f"Updated **{fixed_count}** users with missing fields",
                 color=discord.Color.green()
             )
-            await ctx.send(embed=embed)
+            await ctx.followup.send(embed=embed)
             
         except Exception as e:
             print(f"Error in fixusers command: {e}")
-            await ctx.send("❌ An error occurred while fixing user data!", ephemeral=True)
+            await ctx.followup.send("❌ An error occurred while fixing user data!")
 
 async def setup(bot):
     await bot.add_cog(PointsCog(bot))
