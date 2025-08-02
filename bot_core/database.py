@@ -1,12 +1,12 @@
 # bot_core/database.py
-# Enhanced database handler with connection retry logic and better error handling
+# Fixed database handler with correct MongoDB admin command syntax
 
 from datetime import datetime, timezone
 import logging
 import asyncio
-import os
 import motor.motor_asyncio
 from pymongo.errors import AutoReconnect, NetworkTimeout, ServerSelectionTimeoutError
+import os
 
 logger = logging.getLogger('CookieBot')
 
@@ -20,8 +20,8 @@ class DatabaseHandler:
     async def ensure_connection(self):
         """Ensure MongoDB connection is alive, reconnect if needed"""
         try:
-            # Quick ping to check connection
-            await self.bot.db.admin.command('ping')
+            # Correct syntax for motor admin command
+            await self.bot.mongo_client.admin.command('ping')
             self._connection_retries = 0  # Reset on success
             return True
         except Exception as e:
@@ -51,24 +51,27 @@ class DatabaseHandler:
             
             self.bot.mongo_client = motor.motor_asyncio.AsyncIOMotorClient(
                 MONGODB_URI,
-                maxPoolSize=20,  # Reduced from 40
-                minPoolSize=5,   # Reduced from 7
-                maxIdleTimeMS=30000,  # Reduced from 45000
-                waitQueueTimeoutMS=5000,  # Reduced from 10000
-                serverSelectionTimeoutMS=3000,  # Reduced from 5000
-                connectTimeoutMS=5000,  # Reduced from 10000
+                maxPoolSize=20,
+                minPoolSize=5,
+                maxIdleTimeMS=30000,
+                waitQueueTimeoutMS=5000,
+                serverSelectionTimeoutMS=5000,  # Increased for DNS issues
+                connectTimeoutMS=10000,  # Increased for DNS issues
                 retryWrites=True,
                 retryReads=True,
-                w=1,  # Changed from 'majority' for faster writes
-                readPreference='primaryPreferred',  # Changed from 'nearest'
-                heartbeatFrequencyMS=10000,  # More frequent heartbeats
-                socketTimeoutMS=30000
+                w=1,
+                readPreference='primaryPreferred',
+                heartbeatFrequencyMS=10000,
+                socketTimeoutMS=30000,
+                # DNS resolution settings
+                directConnection=False,
+                dns_resolver='pymongo'
             )
             
             self.bot.db = self.bot.mongo_client[DATABASE_NAME]
             
-            # Test connection
-            await self.bot.db.admin.command('ping')
+            # Test connection with correct syntax
+            await self.bot.mongo_client.admin.command('ping')
             logger.info("MongoDB reconnection successful")
             self._connection_retries = 0
             return True
@@ -81,7 +84,13 @@ class DatabaseHandler:
         """Execute database operation with automatic retry on connection failure"""
         for attempt in range(3):
             try:
-                # Ensure connection before operation
+                # For find operations that return cursors
+                if hasattr(operation, '__name__') and 'find' in operation.__name__:
+                    # Don't check connection for cursor operations
+                    result = operation(*args, **kwargs)
+                    return result
+                
+                # For other operations, ensure connection first
                 if not await self.ensure_connection():
                     raise ConnectionError("MongoDB connection unavailable")
                 
@@ -95,93 +104,97 @@ class DatabaseHandler:
                     await asyncio.sleep(1 * (attempt + 1))
                 else:
                     raise
+            except ConnectionError:
+                # Try to reconnect once more
+                if attempt < 2 and await self._reconnect():
+                    continue
+                raise
             except Exception as e:
                 logger.error(f"Unexpected database error: {e}")
                 raise
     
     async def initialize_database(self):
-        collections = ['users', 'servers', 'config', 'statistics', 'feedback', 'analytics']
-        existing = await self.safe_db_operation(self.bot.db.list_collection_names)
-        
-        for collection in collections:
-            if collection not in existing:
-                await self.safe_db_operation(self.bot.db.create_collection, collection)
-                print(f"📂 Created: {collection}")
-        
-        # Create indexes with error handling
-        indexes = {
-            'users': [
-                {'keys': [('user_id', 1)], 'unique': True},
-                {'keys': [('points', -1)], 'unique': False},
-                {'keys': [('trust_score', -1)], 'unique': False},
-                {'keys': [('last_active', -1)], 'unique': False}  # Index for cleanup
-            ],
-            'servers': [
-                {'keys': [('server_id', 1)], 'unique': True},
-                {'keys': [('enabled', 1)], 'unique': False}
-            ],
-            'feedback': [
-                {'keys': [('user_id', 1)], 'unique': False},
-                {'keys': [('timestamp', -1)], 'unique': False}
-            ]
-        }
-        
-        for collection, index_list in indexes.items():
-            try:
-                existing_indexes = await self.safe_db_operation(
-                    self.bot.db[collection].list_indexes().to_list, None
-                )
-                existing_names = {idx['name'] for idx in existing_indexes}
-                
-                for index_config in index_list:
-                    index_name = '_'.join([f"{k}_{v}" for k, v in index_config['keys']])
+        try:
+            # Use the client's list_database_names instead of db.list_collection_names for initial check
+            await self.safe_db_operation(self.bot.mongo_client.list_database_names)
+            
+            collections = ['users', 'servers', 'config', 'statistics', 'feedback', 'analytics']
+            existing = await self.bot.db.list_collection_names()
+            
+            for collection in collections:
+                if collection not in existing:
+                    await self.bot.db.create_collection(collection)
+                    print(f"📂 Created: {collection}")
+            
+            # Create indexes with error handling
+            indexes = {
+                'users': [
+                    {'keys': [('user_id', 1)], 'unique': True},
+                    {'keys': [('points', -1)], 'unique': False},
+                    {'keys': [('trust_score', -1)], 'unique': False},
+                    {'keys': [('last_active', -1)], 'unique': False}
+                ],
+                'servers': [
+                    {'keys': [('server_id', 1)], 'unique': True},
+                    {'keys': [('enabled', 1)], 'unique': False}
+                ],
+                'feedback': [
+                    {'keys': [('user_id', 1)], 'unique': False},
+                    {'keys': [('timestamp', -1)], 'unique': False}
+                ]
+            }
+            
+            for collection, index_list in indexes.items():
+                try:
+                    # Get existing indexes
+                    existing_indexes = []
+                    async for idx in self.bot.db[collection].list_indexes():
+                        existing_indexes.append(idx)
                     
-                    if index_name not in existing_names:
-                        try:
-                            await self.safe_db_operation(
-                                self.bot.db[collection].create_index,
-                                index_config['keys'],
-                                unique=index_config.get('unique', False),
-                                background=True  # Non-blocking index creation
-                            )
-                            print(f"📑 Index created: {index_name}")
-                        except Exception as e:
-                            if "already exists" not in str(e):
-                                logger.warning(f"⚠️ Index creation failed for {collection}: {e}")
+                    existing_names = {idx['name'] for idx in existing_indexes}
+                    
+                    for index_config in index_list:
+                        index_name = '_'.join([f"{k}_{v}" for k, v in index_config['keys']])
                         
-            except Exception as e:
-                logger.warning(f"⚠️ Index error for {collection}: {e}")
-        
-        # Initialize config with safe operation
-        config = await self.safe_db_operation(
-            self.bot.db.config.find_one, {"_id": "bot_config"}
-        )
-        
-        if not config:
-            await self.safe_db_operation(
-                self.bot.db.config.insert_one,
-                {
+                        if index_name not in existing_names:
+                            try:
+                                await self.bot.db[collection].create_index(
+                                    index_config['keys'],
+                                    unique=index_config.get('unique', False),
+                                    background=True
+                                )
+                                print(f"📑 Index created: {index_name}")
+                            except Exception as e:
+                                if "already exists" not in str(e):
+                                    logger.warning(f"⚠️ Index creation failed for {collection}: {e}")
+                        
+                except Exception as e:
+                    logger.warning(f"⚠️ Index error for {collection}: {e}")
+            
+            # Initialize config
+            config = await self.bot.db.config.find_one({"_id": "bot_config"})
+            
+            if not config:
+                await self.bot.db.config.insert_one({
                     "_id": "bot_config",
                     "maintenance_mode": False,
                     "feedback_minutes": 15,
                     "version": "2.0.0",
                     "created_at": datetime.now(timezone.utc)
-                }
-            )
-        
-        # Initialize stats with safe operation
-        stats = await self.safe_db_operation(
-            self.bot.db.statistics.find_one, {"_id": "global_stats"}
-        )
-        
-        if not stats:
-            await self.safe_db_operation(
-                self.bot.db.statistics.insert_one,
-                {
+                })
+            
+            # Initialize stats
+            stats = await self.bot.db.statistics.find_one({"_id": "global_stats"})
+            
+            if not stats:
+                await self.bot.db.statistics.insert_one({
                     "_id": "global_stats",
                     "total_claims": {},
                     "weekly_claims": {},
                     "all_time_claims": 0,
                     "created_at": datetime.now(timezone.utc)
-                }
-            )
+                })
+                
+        except Exception as e:
+            logger.error(f"Error initializing database: {e}")
+            raise
