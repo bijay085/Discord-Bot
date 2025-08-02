@@ -1,3 +1,5 @@
+# bot_core/bot.py - Key improvements for stability
+
 import discord
 from discord.ext import commands, tasks
 import motor.motor_asyncio
@@ -54,6 +56,7 @@ class CookieBot(commands.Bot):
         self.active_claims = {}
         self.db_handler = DatabaseHandler(self)
         self.event_handler = EventHandler(self)
+        self._connection_check_task = None
         
     async def setup_hook(self):
         print("🚀 Initializing...")
@@ -79,22 +82,27 @@ class CookieBot(commands.Bot):
         
         print(f"🔗 Connecting to MongoDB...")
         
+        # Initialize MongoDB with improved settings
         try:
             self.mongo_client = motor.motor_asyncio.AsyncIOMotorClient(
                 MONGODB_URI,
-                maxPoolSize=40,
-                minPoolSize=7,
-                maxIdleTimeMS=45000,
-                waitQueueTimeoutMS=10000,
-                serverSelectionTimeoutMS=5000,
-                connectTimeoutMS=10000,
+                maxPoolSize=20,  # Reduced from 40
+                minPoolSize=5,   # Reduced from 7
+                maxIdleTimeMS=30000,  # Reduced from 45000
+                waitQueueTimeoutMS=5000,  # Reduced from 10000
+                serverSelectionTimeoutMS=3000,  # Reduced from 5000
+                connectTimeoutMS=5000,  # Reduced from 10000
                 retryWrites=True,
-                w='majority',
-                readPreference='nearest'
+                retryReads=True,
+                w=1,  # Changed from 'majority' for faster writes
+                readPreference='primaryPreferred',  # Changed from 'nearest'
+                heartbeatFrequencyMS=10000,
+                socketTimeoutMS=30000
             )
             
             self.db = self.mongo_client[DATABASE_NAME]
             
+            # Test connection
             result = await self.mongo_client.admin.command('ping')
             print("✅ MongoDB connected!")
             
@@ -107,12 +115,23 @@ class CookieBot(commands.Bot):
         print("📚 Loading cogs...")
         await self.load_cogs()
         
+        # Start background tasks with error handling
         self.update_presence.start()
         self.cleanup_cache.start()
         self.monitor_performance.start()
         self.cleanup_active_claims.start()
+        self._connection_check_task = asyncio.create_task(self._monitor_db_connection())
         
         print("✅ Ready!")
+    
+    async def _monitor_db_connection(self):
+        """Monitor database connection health"""
+        while not self.is_closed():
+            try:
+                await asyncio.sleep(30)  # Check every 30 seconds
+                await self.db_handler.ensure_connection()
+            except Exception as e:
+                logger.error(f"Database connection monitor error: {e}")
         
     async def load_cogs(self):
         core_cogs = [
@@ -146,7 +165,7 @@ class CookieBot(commands.Bot):
     @tasks.loop(minutes=5)
     async def update_presence(self):
         try:
-            if not self.is_ready():
+            if not self.is_ready() or not self.ws:
                 return
                 
             presences = [
@@ -166,8 +185,11 @@ class CookieBot(commands.Bot):
                 ),
                 status=discord.Status.online
             )
+        except discord.errors.InvalidArgument:
+            pass  # Ignore if websocket is closing
         except Exception as e:
-            logger.error(f"Error updating presence: {e}")
+            if "Cannot write to closing transport" not in str(e):
+                logger.error(f"Error updating presence: {e}")
     
     @tasks.loop(hours=1)
     async def cleanup_cache(self):
@@ -178,8 +200,12 @@ class CookieBot(commands.Bot):
                 
             self.command_stats.clear()
             
+            # Clean old analytics with safe operation
             cutoff = datetime.now(timezone.utc) - timedelta(days=30)
-            await self.db.analytics.delete_many({"timestamp": {"$lt": cutoff}})
+            await self.db_handler.safe_db_operation(
+                self.db.analytics.delete_many,
+                {"timestamp": {"$lt": cutoff}}
+            )
             
         except Exception as e:
             logger.error(f"Error in cleanup: {e}")
@@ -190,6 +216,7 @@ class CookieBot(commands.Bot):
             if not self.is_ready():
                 return
                 
+            # Clean up orphaned claims
             for user_id in list(self.active_claims.keys()):
                 if not self.get_user(user_id):
                     del self.active_claims[user_id]
@@ -208,27 +235,36 @@ class CookieBot(commands.Bot):
         try:
             if not self.is_ready():
                 return
-                
-            latency = round(self.latency * 1000) if self.latency and not math.isnan(self.latency) else 0
             
+            # Safe latency calculation
+            if self.latency and not math.isnan(self.latency) and not math.isinf(self.latency):
+                latency = round(self.latency * 1000)
+            else:
+                latency = 0
+                
             if latency > 200:
                 print(f"⚠️ High latency: {latency}ms")
                 
             cpu_percent = psutil.cpu_percent(interval=1)
             memory = psutil.virtual_memory()
             
-            await self.db.analytics.insert_one({
-                "type": "performance",
-                "timestamp": datetime.now(timezone.utc),
-                "latency": latency,
-                "cpu_percent": cpu_percent,
-                "memory_percent": memory.percent,
-                "guilds": len(self.guilds),
-                "users": sum(g.member_count for g in self.guilds)
-            })
+            # Use safe db operation
+            await self.db_handler.safe_db_operation(
+                self.db.analytics.insert_one,
+                {
+                    "type": "performance",
+                    "timestamp": datetime.now(timezone.utc),
+                    "latency": latency,
+                    "cpu_percent": cpu_percent,
+                    "memory_percent": memory.percent,
+                    "guilds": len(self.guilds),
+                    "users": sum(g.member_count for g in self.guilds)
+                }
+            )
             
         except Exception as e:
-            logger.error(f"Error monitoring performance: {e}")
+            if "cannot convert float infinity to integer" not in str(e):
+                logger.error(f"Error monitoring performance: {e}")
     
     @update_presence.before_loop
     async def before_update_presence(self):
@@ -264,17 +300,22 @@ class CookieBot(commands.Bot):
                 timestamp=datetime.now(timezone.utc)
             )
             
-            # Basic info
+            # Basic info with safe latency
+            latency = round(self.latency * 1000) if self.latency and not math.isnan(self.latency) else 0
             embed.add_field(
                 name="🤖 Bot Info",
                 value=f"**Uptime:** {self.get_uptime()}\n"
-                      f"**Ping:** {round(self.latency * 1000)}ms\n"
+                      f"**Ping:** {latency}ms\n"
                       f"**Servers:** {len(self.guilds)}",
                 inline=True
             )
             
-            # Quick stats
-            total_cookies = await self.get_total_cookies()
+            # Quick stats with safe db operation
+            try:
+                total_cookies = await self.get_total_cookies()
+            except:
+                total_cookies = 0
+                
             embed.add_field(
                 name="📊 Quick Stats",
                 value=f"**Cookies Served:** {total_cookies:,}\n"
@@ -303,9 +344,14 @@ class CookieBot(commands.Bot):
         await self.process_commands(message)
     
     async def get_total_cookies(self):
-        """Get total cookies distributed"""
-        stats = await self.db.statistics.find_one({"_id": "global_stats"})
-        return stats.get("all_time_claims", 0) if stats else 0
+        """Get total cookies distributed with safe operation"""
+        try:
+            stats = await self.db_handler.safe_db_operation(
+                self.db.statistics.find_one, {"_id": "global_stats"}
+            )
+            return stats.get("all_time_claims", 0) if stats else 0
+        except:
+            return 0
     
     async def on_guild_join(self, guild):
         await self.event_handler.on_guild_join(guild)
@@ -322,19 +368,29 @@ class CookieBot(commands.Bot):
     async def close(self):
         print("🛑 Shutting down...")
         
-        config = await self.db.config.find_one({"_id": "bot_config"})
-        if config and config.get("main_log_channel"):
-            channel = self.get_channel(config["main_log_channel"])
-            if channel:
-                embed = discord.Embed(
-                    title="🔴 Bot Offline",
-                    description="Cookie Bot is shutting down...",
-                    color=0xE74C3C,
-                    timestamp=datetime.now(timezone.utc)
-                )
-                embed.add_field(name="Uptime", value=self.get_uptime(), inline=True)
-                embed.add_field(name="Commands Processed", value=f"{sum(self.command_stats.values()):,}", inline=True)
-                await channel.send(embed=embed)
+        # Cancel background tasks
+        if self._connection_check_task:
+            self._connection_check_task.cancel()
+        
+        # Send shutdown message with safe db operation
+        try:
+            config = await self.db_handler.safe_db_operation(
+                self.db.config.find_one, {"_id": "bot_config"}
+            )
+            if config and config.get("main_log_channel"):
+                channel = self.get_channel(config["main_log_channel"])
+                if channel:
+                    embed = discord.Embed(
+                        title="🔴 Bot Offline",
+                        description="Cookie Bot is shutting down...",
+                        color=0xE74C3C,
+                        timestamp=datetime.now(timezone.utc)
+                    )
+                    embed.add_field(name="Uptime", value=self.get_uptime(), inline=True)
+                    embed.add_field(name="Commands Processed", value=f"{sum(self.command_stats.values()):,}", inline=True)
+                    await channel.send(embed=embed)
+        except:
+            pass
         
         if self.session and not self.session.closed:
             await self.session.close()
