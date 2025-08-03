@@ -478,9 +478,14 @@ class FeedbackCog(commands.Cog):
                             if has_text_feedback:
                                 # Complete feedback (text + photo)
                                 # Check if feedback was submitted within 2 minutes
+                                # Check if feedback was submitted within 2 minutes
                                 quick_feedback_bonus = 0
                                 text_feedback_time = last_claim.get("text_feedback_time")
                                 if text_feedback_time:
+                                    # Ensure text_feedback_time is timezone-aware
+                                    if isinstance(text_feedback_time, datetime):
+                                        if text_feedback_time.tzinfo is None:
+                                            text_feedback_time = text_feedback_time.replace(tzinfo=timezone.utc)
                                     time_diff = (datetime.now(timezone.utc) - text_feedback_time).total_seconds()
                                     if time_diff <= 120:  # Within 2 minutes
                                         quick_feedback_bonus = 0.5

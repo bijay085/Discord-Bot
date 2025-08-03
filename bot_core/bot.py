@@ -141,7 +141,8 @@ class CookieBot(commands.Bot):
             "cogs.invite",
             "cogs.directory",
             "cogs.analytics",
-            "cogs.feedback"
+            "cogs.feedback",
+            "cogs.givecookie"
         ]
         
         loaded = 0
