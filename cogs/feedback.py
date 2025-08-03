@@ -200,7 +200,8 @@ class FeedbackCog(commands.Cog):
                           f"• Complete your feedback\n"
                           f"• Get +{0.25 * trust_multiplier:.2f} more trust\n"
                           f"• Earn bonus points\n"
-                          f"• Avoid blacklist",
+                          f"• Avoid blacklist\n"
+                          f"**⚡ Quick bonus: +0.5 points if posted within 2 minutes!**",
                     inline=False
                 )
             
@@ -397,6 +398,13 @@ class FeedbackCog(commands.Cog):
                 inline=False
             )
             
+            # Add quick feedback bonus info
+            embed.add_field(
+                name="⚡ Quick Feedback Bonus",
+                value="Submit both text and screenshot within **2 minutes** for +0.5 bonus points!",
+                inline=False
+            )
+            
             role_config = await self.get_user_role_config(ctx.author, server)
             if role_config and role_config.get("trust_multiplier", 1.0) > 1.0:
                 embed.add_field(
@@ -469,6 +477,14 @@ class FeedbackCog(commands.Cog):
                             
                             if has_text_feedback:
                                 # Complete feedback (text + photo)
+                                # Check if feedback was submitted within 2 minutes
+                                quick_feedback_bonus = 0
+                                text_feedback_time = last_claim.get("text_feedback_time")
+                                if text_feedback_time:
+                                    time_diff = (datetime.now(timezone.utc) - text_feedback_time).total_seconds()
+                                    if time_diff <= 120:  # Within 2 minutes
+                                        quick_feedback_bonus = 0.5
+                                
                                 await self.db.users.update_one(
                                     {"user_id": message.author.id},
                                     {
@@ -480,8 +496,8 @@ class FeedbackCog(commands.Cog):
                                         },
                                         "$inc": {
                                             "trust_score": screenshot_trust,
-                                            "points": feedback_bonus_points,
-                                            "total_earned": feedback_bonus_points
+                                            "points": feedback_bonus_points + quick_feedback_bonus,
+                                            "total_earned": feedback_bonus_points + quick_feedback_bonus
                                         }
                                     }
                                 )
@@ -497,13 +513,16 @@ class FeedbackCog(commands.Cog):
                                         "$set": {
                                             "has_screenshot": True,
                                             "screenshot_url": message.attachments[0].url,
-                                            "feedback_type": "complete"
+                                            "feedback_type": "complete",
+                                            "quick_feedback_bonus": quick_feedback_bonus > 0
                                         }
                                     }
                                 )
                                 
                                 embed_title = "🎉 Feedback Complete!"
                                 embed_description = "Both text and screenshot submitted!"
+                                if quick_feedback_bonus > 0:
+                                    embed_description += "\n⚡ Quick feedback bonus earned!"
                                 total_trust = 0.5 * trust_multiplier  # 0.25 + 0.25
                                 
                                 # Log complete feedback
@@ -512,9 +531,13 @@ class FeedbackCog(commands.Cog):
                                 if len(last_claim.get('feedback_text', '')) > 50:
                                     feedback_text += "..."
                                 
+                                log_message = f"🎉 {message.author.mention} completed feedback for **{cookie_type}** cookie with screenshot {stars} - \"{feedback_text}\""
+                                if quick_feedback_bonus > 0:
+                                    log_message += " ⚡ +0.5 quick bonus!"
+                                
                                 await self.log_action(
                                     message.guild.id,
-                                    f"🎉 {message.author.mention} completed feedback for **{cookie_type}** cookie with screenshot {stars} - \"{feedback_text}\"",
+                                    log_message,
                                     discord.Color.green()
                                 )
                             else:
@@ -552,8 +575,9 @@ class FeedbackCog(commands.Cog):
                                 })
                                 
                                 embed_title = "📸 Screenshot Received!"
-                                embed_description = "Photo submitted! Use `/feedback` for text review."
+                                embed_description = "Photo submitted! Use `/feedback` for text review.\n⚡ Submit text within 2 minutes for +0.5 bonus!"
                                 total_trust = screenshot_trust
+                                quick_feedback_bonus = 0
                                 
                                 await self.log_action(
                                     message.guild.id,
@@ -566,6 +590,8 @@ class FeedbackCog(commands.Cog):
                             await message.add_reaction("📸")
                             if has_text_feedback:
                                 await message.add_reaction("🎉")
+                                if quick_feedback_bonus > 0:
+                                    await message.add_reaction("⚡")
                             
                             try:
                                 embed = discord.Embed(
@@ -581,7 +607,7 @@ class FeedbackCog(commands.Cog):
                                 )
                                 embed.add_field(
                                     name="💰 Bonus Points",
-                                    value=f"+{feedback_bonus_points}",
+                                    value=f"+{feedback_bonus_points + quick_feedback_bonus}",
                                     inline=True
                                 )
                                 embed.add_field(
@@ -589,6 +615,13 @@ class FeedbackCog(commands.Cog):
                                     value=cookie_type.title(),
                                     inline=True
                                 )
+                                
+                                if quick_feedback_bonus > 0:
+                                    embed.add_field(
+                                        name="⚡ Quick Bonus",
+                                        value="+0.5 points for fast feedback!",
+                                        inline=False
+                                    )
                                 
                                 if role_config and trust_multiplier > 1.0:
                                     embed.add_field(
@@ -600,7 +633,7 @@ class FeedbackCog(commands.Cog):
                                 if not has_text_feedback:
                                     embed.add_field(
                                         name="💡 Next Step",
-                                        value="Use `/feedback` to add a text review for more trust points!",
+                                        value="Use `/feedback` to add a text review for more trust points!\n⚡ Submit within 2 minutes for +0.5 bonus!",
                                         inline=False
                                     )
                                 else:

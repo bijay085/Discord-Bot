@@ -242,19 +242,26 @@ class CookieCog(commands.Cog):
             print(f"Error updating statistics: {e}")
     
     async def check_maintenance(self, ctx) -> bool:
-        config = await self.db.config.find_one({"_id": "bot_config"})
-        owner_id = config.get("owner_id")
-        if config.get("maintenance_mode") and ctx.author.id != owner_id:
-            embed = discord.Embed(
-                title="🔧 Maintenance Mode",
-                description="The bot is currently under maintenance.\nPlease try again later!",
-                color=discord.Color.orange()
-            )
-            embed.set_footer(text="We'll be back soon!")
-            await ctx.send(embed=embed, ephemeral=True)
-            return False
-        return True
-    
+        try:
+            config = await self.bot.db.config.find_one({"_id": "bot_config"})
+            if not config:
+                return True  # Allow if no config found
+                
+            owner_id = config.get("owner_id")
+            if config.get("maintenance_mode") and ctx.author.id != owner_id:
+                embed = discord.Embed(
+                    title="🔧 Maintenance Mode",
+                    description="The bot is currently under maintenance.\nPlease try again later!",
+                    color=discord.Color.orange()
+                )
+                embed.set_footer(text="We'll be back soon!")
+                await ctx.send(embed=embed, ephemeral=True)
+                return False
+            return True
+        except Exception as e:
+            print(f"Error checking maintenance: {e}")
+            return True  # Allow on error to prevent blocking
+        
     async def check_blacklist(self, user_id: int) -> tuple[bool, datetime]:
         user = await self.db.users.find_one({"user_id": user_id})
         if not user or not user.get("blacklisted"):

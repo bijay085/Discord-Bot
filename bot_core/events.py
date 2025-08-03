@@ -1,5 +1,5 @@
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 from datetime import datetime, timezone, timedelta
 import platform
 import psutil
@@ -192,6 +192,31 @@ class EventHandler:
                 else:
                     print(f"❌ Announcement channel {announcement_channel_id} not found for {server_data.get('server_name', 'Unknown')}")
         
+        # Send simple message to log channels
+        servers_with_logs = await self.bot.db.servers.find({
+            "channels.log": {"$exists": True, "$ne": None},
+            "enabled": True
+        }).to_list(None)
+        
+        for server_data in servers_with_logs:
+            log_channel_id = server_data["channels"]["log"]
+            log_channel = self.bot.get_channel(log_channel_id)
+            
+            if log_channel:
+                try:
+                    # Simple embed for log channel - no buttons
+                    log_embed = discord.Embed(
+                        title="🟢 Bot Online",
+                        description=f"Cookie Bot started with **{sum(g.member_count for g in self.bot.guilds):,}** members across **{len(self.bot.guilds)}** servers",
+                        color=0x2ECC71,
+                        timestamp=datetime.now(timezone.utc)
+                    )
+                    
+                    await log_channel.send(embed=log_embed)
+                except Exception as e:
+                    print(f"❌ Failed to send to log channel: {e}")
+        
+        # Also send to main log channel if configured
         config = await self.bot.db.config.find_one({"_id": "bot_config"})
         if config and config.get("main_log_channel"):
             channel = self.bot.get_channel(config["main_log_channel"])
@@ -211,6 +236,7 @@ class EventHandler:
                 embed.set_thumbnail(url=self.bot.user.avatar.url)
                 embed.set_footer(text="Cookie Bot Premium v2.0", icon_url=self.bot.user.avatar.url)
                 
+                # Send with BotControlView to main log channel
                 view = BotControlView(self.bot)
                 message = await channel.send(embed=view.create_status_embed(), view=view)
                 self.bot.status_messages[channel.id] = message.id
