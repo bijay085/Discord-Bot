@@ -84,8 +84,12 @@ class PointsCog(commands.Cog):
     @commands.hybrid_command(name="daily", description="Claim your daily points with role bonuses")
     async def daily(self, ctx):
         try:
-            # Defer immediately to prevent interaction timeout
-            await ctx.defer(ephemeral=True)
+            # Check if this is an interaction (slash command) or regular command
+            is_interaction = hasattr(ctx, 'interaction') and ctx.interaction is not None
+            
+            if is_interaction:
+                # For slash commands, defer the interaction response
+                await ctx.interaction.response.defer(ephemeral=True)
             
             server = await self.db.servers.find_one({"server_id": ctx.guild.id})
             if not server or not server.get("enabled"):
@@ -95,7 +99,10 @@ class PointsCog(commands.Cog):
                     color=discord.Color.red()
                 )
                 embed.set_footer(text="Contact an admin to enable the bot")
-                await ctx.followup.send(embed=embed)
+                if is_interaction:
+                    await ctx.interaction.followup.send(embed=embed)
+                else:
+                    await ctx.send(embed=embed, ephemeral=True)
                 return
             
             user_data = await self.get_or_create_user(ctx.author.id, str(ctx.author))
@@ -131,7 +138,10 @@ class PointsCog(commands.Cog):
                     embed.add_field(name="Last Claimed", value=f"<t:{int(daily_claimed.timestamp())}:R>", inline=True)
                     embed.set_footer(text="Daily resets at midnight UTC!")
                     
-                    await ctx.followup.send(embed=embed)
+                    if is_interaction:
+                        await ctx.interaction.followup.send(embed=embed)
+                    else:
+                        await ctx.send(embed=embed, ephemeral=True)
                     return
             
             config = await self.db.config.find_one({"_id": "bot_config"})
@@ -196,7 +206,10 @@ class PointsCog(commands.Cog):
             else:
                 embed.set_footer(text=f"Total earned: {user_data['total_earned'] + total_daily_points} points")
             
-            await ctx.followup.send(embed=embed)
+            if is_interaction:
+                await ctx.interaction.followup.send(embed=embed)
+            else:
+                await ctx.send(embed=embed, ephemeral=True)
             
             # Log action separately to avoid blocking
             asyncio.create_task(self.log_action(
@@ -212,12 +225,19 @@ class PointsCog(commands.Cog):
                 description="An error occurred while claiming your daily points!",
                 color=discord.Color.red()
             )
-            await ctx.followup.send(embed=embed)
+            if is_interaction:
+                await ctx.interaction.followup.send(embed=embed)
+            else:
+                await ctx.send(embed=embed, ephemeral=True)
     
     @commands.hybrid_command(name="points", description="Check your points and stats")
     async def points(self, ctx, user: discord.Member = None):
         try:
-            await ctx.defer(ephemeral=True)
+            # Check if this is an interaction (slash command) or regular command
+            is_interaction = hasattr(ctx, 'interaction') and ctx.interaction is not None
+            
+            if is_interaction:
+                await ctx.interaction.response.defer(ephemeral=True)
             
             target = user or ctx.author
             user_data = await self.get_or_create_user(target.id, str(target))
@@ -313,17 +333,26 @@ class PointsCog(commands.Cog):
             else:
                 embed.set_footer(text="Account created: Unknown")
             
-            await ctx.followup.send(embed=embed)
+            if is_interaction:
+                await ctx.interaction.followup.send(embed=embed)
+            else:
+                await ctx.send(embed=embed, ephemeral=True)
         except Exception as e:
             print(f"Error in points command: {e}")
             import traceback
             print(traceback.format_exc())
-            await ctx.followup.send("❌ An error occurred!")
+            if is_interaction:
+                await ctx.interaction.followup.send("❌ An error occurred!")
+            else:
+                await ctx.send("❌ An error occurred!", ephemeral=True)
     
     @commands.hybrid_command(name="getpoints", description="Ways to earn points")
     async def getpoints(self, ctx):
         try:
-            await ctx.defer(ephemeral=True)
+            is_interaction = hasattr(ctx, 'interaction') and ctx.interaction is not None
+            
+            if is_interaction:
+                await ctx.interaction.response.defer(ephemeral=True)
             
             config = await self.db.config.find_one({"_id": "bot_config"})
             server = await self.db.servers.find_one({"server_id": ctx.guild.id})
@@ -406,16 +435,27 @@ class PointsCog(commands.Cog):
             main_invite = config.get("main_server_invite", "")
             embed.set_footer(text=f"Need help? Join: {main_invite}")
             
-            await ctx.followup.send(embed=embed)
+            if is_interaction:
+                await ctx.interaction.followup.send(embed=embed)
+            else:
+                await ctx.send(embed=embed, ephemeral=True)
         except Exception as e:
             print(f"Error in getpoints command: {e}")
-            await ctx.followup.send("❌ An error occurred!")
+            if is_interaction:
+                await ctx.interaction.followup.send("❌ An error occurred!")
+            else:
+                await ctx.send("❌ An error occurred!", ephemeral=True)
     
     @commands.hybrid_command(name="status", description="Check detailed user status")
     @app_commands.describe(user="The user to check status for (leave empty for yourself)")
     async def status(self, ctx, user: discord.Member = None):
+        is_interaction = hasattr(ctx, 'interaction') and ctx.interaction is not None
+        deferred = False
+        
         try:
-            await ctx.defer(ephemeral=True)
+            if is_interaction:
+                await ctx.interaction.response.defer(ephemeral=True)
+                deferred = True
             
             if user is None:
                 user = ctx.author
@@ -427,7 +467,10 @@ class PointsCog(commands.Cog):
                     description="This user hasn't used the bot yet!",
                     color=discord.Color.red()
                 )
-                await ctx.followup.send(embed=embed)
+                if is_interaction:
+                    await ctx.interaction.followup.send(embed=embed)
+                else:
+                    await ctx.send(embed=embed, ephemeral=True)
                 return
             
             server = await self.db.servers.find_one({"server_id": ctx.guild.id})
@@ -525,15 +568,34 @@ class PointsCog(commands.Cog):
             
             embed.set_footer(text=f"User ID: {user.id} • Joined: {user_data.get('first_seen', datetime.now(timezone.utc)).strftime('%Y-%m-%d')}")
             
-            await ctx.followup.send(embed=embed)
+            if is_interaction:
+                await ctx.interaction.followup.send(embed=embed)
+            else:
+                await ctx.send(embed=embed, ephemeral=True)
         except Exception as e:
             print(f"Error in status command: {e}")
-            await ctx.followup.send("❌ An error occurred!")
+            import traceback
+            print(traceback.format_exc())
+            
+            error_message = "❌ An error occurred!"
+            
+            try:
+                if is_interaction and deferred:
+                    await ctx.interaction.followup.send(error_message)
+                elif is_interaction and not deferred:
+                    await ctx.interaction.response.send_message(error_message, ephemeral=True)
+                else:
+                    await ctx.send(error_message, ephemeral=True)
+            except Exception as send_error:
+                print(f"Error sending error message: {send_error}")
     
     @commands.hybrid_command(name="help", description="Show all available commands")
     async def help_command(self, ctx):
         try:
-            await ctx.defer(ephemeral=True)
+            is_interaction = hasattr(ctx, 'interaction') and ctx.interaction is not None
+            
+            if is_interaction:
+                await ctx.interaction.response.defer(ephemeral=True)
             
             config = await self.db.config.find_one({"_id": "bot_config"})
             server = await self.db.servers.find_one({"server_id": ctx.guild.id})
@@ -616,16 +678,25 @@ class PointsCog(commands.Cog):
             main_invite = config.get("main_server_invite", "")
             embed.set_footer(text=f"Support Server: {main_invite}")
             
-            await ctx.followup.send(embed=embed)
+            if is_interaction:
+                await ctx.interaction.followup.send(embed=embed)
+            else:
+                await ctx.send(embed=embed, ephemeral=True)
         except Exception as e:
             print(f"Error in help command: {e}")
-            await ctx.followup.send("❌ An error occurred!")
+            if is_interaction:
+                await ctx.interaction.followup.send("❌ An error occurred!")
+            else:
+                await ctx.send("❌ An error occurred!", ephemeral=True)
 
     @commands.hybrid_command(name="fixusers", description="Fix missing user fields (Admin only)")
     @commands.has_permissions(administrator=True)
     async def fixusers(self, ctx):
         try:
-            await ctx.defer()
+            is_interaction = hasattr(ctx, 'interaction') and ctx.interaction is not None
+            
+            if is_interaction:
+                await ctx.interaction.response.defer()
             
             fixed_count = 0
             async for user in self.db.users.find():
@@ -675,11 +746,18 @@ class PointsCog(commands.Cog):
                 description=f"Updated **{fixed_count}** users with missing fields",
                 color=discord.Color.green()
             )
-            await ctx.followup.send(embed=embed)
+            
+            if is_interaction:
+                await ctx.interaction.followup.send(embed=embed)
+            else:
+                await ctx.send(embed=embed)
             
         except Exception as e:
             print(f"Error in fixusers command: {e}")
-            await ctx.followup.send("❌ An error occurred while fixing user data!")
+            if is_interaction:
+                await ctx.interaction.followup.send("❌ An error occurred while fixing user data!")
+            else:
+                await ctx.send("❌ An error occurred while fixing user data!")
 
 async def setup(bot):
     await bot.add_cog(PointsCog(bot))

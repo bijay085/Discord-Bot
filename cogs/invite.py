@@ -1,6 +1,6 @@
 # cogs/invite.py
 # Location: cogs/invite.py
-# Description: Updated invite tracking with role benefits and new DB structure
+# Description: Improved invite tracking system that prevents duplicate rewards
 
 import discord
 from discord.ext import commands, tasks
@@ -19,8 +19,8 @@ class InviteLeaderboardView(discord.ui.View):
         
     async def get_leaderboard_data(self):
         users = await self.cog.db.users.find(
-            {"invite_count": {"$gt": 0}}
-        ).sort("invite_count", -1).limit(50).to_list(None)
+            {"verified_invites": {"$gt": 0}}
+        ).sort("verified_invites", -1).limit(50).to_list(None)
         return users
     
     async def create_embed(self):
@@ -32,7 +32,7 @@ class InviteLeaderboardView(discord.ui.View):
         
         embed = discord.Embed(
             title="👥 Invite Leaderboard",
-            description="Top inviters in the server",
+            description="Top verified inviters in the server",
             color=discord.Color.gold(),
             timestamp=datetime.now(timezone.utc)
         )
@@ -41,8 +41,9 @@ class InviteLeaderboardView(discord.ui.View):
         for idx, user_data in enumerate(users[start:end], start=start+1):
             user = self.cog.bot.get_user(user_data["user_id"])
             username = user.name if user else user_data.get("username", "Unknown")
-            invites = user_data.get("invite_count", 0)
+            total = user_data.get("invite_count", 0)
             verified = user_data.get("verified_invites", 0)
+            unique = user_data.get("unique_invites", 0)
             
             medal = ""
             if idx == 1:
@@ -52,10 +53,10 @@ class InviteLeaderboardView(discord.ui.View):
             elif idx == 3:
                 medal = "🥉"
             
-            leaderboard_text += f"{medal} **{idx}.** {username} - **{invites}** invites ({verified} verified)\n"
+            leaderboard_text += f"{medal} **{idx}.** {username} - **{verified}** verified ({unique} unique)\n"
         
-        embed.description = leaderboard_text or "No invites recorded yet!"
-        embed.set_footer(text=f"Page {self.current_page + 1}/{total_pages}")
+        embed.description = leaderboard_text or "No verified invites recorded yet!"
+        embed.set_footer(text=f"Page {self.current_page + 1}/{total_pages} • Only showing verified invites")
         
         return embed
     
@@ -80,10 +81,41 @@ class InviteCog(commands.Cog):
         self.pending_rewards = {}
         self.tracked_members = {}
         self.cleanup_tracked_members.start()
+        self.cleanup_old_invites.start()
         
     async def cog_unload(self):
         self.invite_cache_update.cancel()
         self.cleanup_tracked_members.cancel()
+        self.cleanup_old_invites.cancel()
+        
+    @tasks.loop(hours=24)
+    async def cleanup_old_invites(self):
+        """Clean up old unverified invites older than 30 days"""
+        try:
+            cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+            
+            # Remove old unverified invites from user data
+            result = await self.db.users.update_many(
+                {},
+                {
+                    "$pull": {
+                        "invited_users": {
+                            "verified": False,
+                            "joined_at": {"$lt": cutoff}
+                        }
+                    }
+                }
+            )
+            
+            if result.modified_count > 0:
+                print(f"🧹 Cleaned up old unverified invites from {result.modified_count} users")
+                
+        except Exception as e:
+            print(f"Error in cleanup_old_invites: {e}")
+    
+    @cleanup_old_invites.before_loop
+    async def before_cleanup_old_invites(self):
+        await self.bot.wait_until_ready()
         
     @tasks.loop(hours=6)
     async def cleanup_tracked_members(self):
@@ -120,9 +152,12 @@ class InviteCog(commands.Cog):
                 "daily_claimed": None,
                 "invite_count": 0,
                 "invited_users": [],
+                "invited_user_ids": [],  # Track unique user IDs invited
                 "pending_invites": 0,
                 "verified_invites": 0,
+                "unique_invites": 0,  # Track unique verified invites
                 "fake_invites": 0,
+                "duplicate_invites": 0,  # Track duplicate attempts
                 "last_claim": None,
                 "cookie_claims": {},
                 "daily_claims": {},
@@ -142,6 +177,22 @@ class InviteCog(commands.Cog):
                 }
             }
             await self.db.users.insert_one(user)
+        else:
+            # Ensure new fields exist
+            updates = {}
+            if "invited_user_ids" not in user:
+                updates["invited_user_ids"] = []
+            if "unique_invites" not in user:
+                updates["unique_invites"] = 0
+            if "duplicate_invites" not in user:
+                updates["duplicate_invites"] = 0
+                
+            if updates:
+                await self.db.users.update_one(
+                    {"user_id": user_id},
+                    {"$set": updates}
+                )
+                
         return user
     
     async def get_user_role_config(self, member: discord.Member, server: dict) -> dict:
@@ -234,6 +285,52 @@ class InviteCog(commands.Cog):
             if used_invite and used_invite.inviter:
                 inviter_data = await self.get_or_create_user(used_invite.inviter.id, str(used_invite.inviter))
                 
+                # Check if this user was already invited by this inviter (duplicate)
+                already_invited = member.id in inviter_data.get("invited_user_ids", [])
+                
+                if already_invited:
+                    # This is a duplicate - user rejoined
+                    await self.db.users.update_one(
+                        {"user_id": used_invite.inviter.id},
+                        {
+                            "$inc": {"duplicate_invites": 1},
+                            "$set": {"last_active": datetime.now(timezone.utc)}
+                        }
+                    )
+                    
+                    # Log the duplicate attempt
+                    await self.log_action(
+                        guild.id,
+                        f"🔄 {member.mention} rejoined using invite from {used_invite.inviter.mention} (Duplicate - No points)",
+                        discord.Color.orange()
+                    )
+                    
+                    # Notify inviter about duplicate
+                    try:
+                        dm_embed = discord.Embed(
+                            title="🔄 Duplicate Invite Detected",
+                            description=f"{member.name} rejoined **{guild.name}** using your invite!",
+                            color=discord.Color.orange()
+                        )
+                        dm_embed.add_field(
+                            name="⚠️ No Points Awarded",
+                            value="This user has already been invited by you before. No points will be awarded for duplicate invites.",
+                            inline=False
+                        )
+                        dm_embed.add_field(
+                            name="Total Duplicates",
+                            value=f"**{inviter_data.get('duplicate_invites', 0) + 1}** duplicate invites",
+                            inline=True
+                        )
+                        dm_embed.set_footer(text="Invite new unique users to earn points!")
+                        
+                        await used_invite.inviter.send(embed=dm_embed)
+                    except:
+                        pass
+                    
+                    return  # Don't process further for duplicates
+                
+                # This is a new unique invite
                 # Get inviter's role benefits
                 inviter_member = guild.get_member(used_invite.inviter.id)
                 role_config = {}
@@ -244,14 +341,18 @@ class InviteCog(commands.Cog):
                     {"user_id": used_invite.inviter.id},
                     {
                         "$inc": {"invite_count": 1, "pending_invites": 1},
-                        "$push": {"invited_users": {
-                            "user_id": member.id,
-                            "username": str(member),
-                            "joined_at": datetime.now(timezone.utc),
-                            "verified": False,
-                            "invite_code": used_invite.code,
-                            "role_benefits_at_time": role_config.get("name") if role_config else None
-                        }},
+                        "$push": {
+                            "invited_users": {
+                                "user_id": member.id,
+                                "username": str(member),
+                                "joined_at": datetime.now(timezone.utc),
+                                "verified": False,
+                                "invite_code": used_invite.code,
+                                "role_benefits_at_time": role_config.get("name") if role_config else None,
+                                "first_time": True  # Mark as first time invite
+                            },
+                            "invited_user_ids": member.id  # Add to unique user IDs list
+                        },
                         "$set": {"last_active": datetime.now(timezone.utc)}
                     }
                 )
@@ -264,7 +365,7 @@ class InviteCog(commands.Cog):
                 
                 embed = discord.Embed(
                     title="👋 New Member Joined!",
-                    description=f"{member.mention} joined using an invite",
+                    description=f"{member.mention} joined using an invite (First time)",
                     color=discord.Color.blue(),
                     timestamp=datetime.now(timezone.utc)
                 )
@@ -280,12 +381,12 @@ class InviteCog(commands.Cog):
                     )
                 
                 embed.set_thumbnail(url=member.display_avatar.url)
-                embed.set_footer(text=f"Member #{guild.member_count}")
+                embed.set_footer(text=f"Member #{guild.member_count} • Unique invite")
                 
                 # Use asyncio.create_task to avoid blocking
                 asyncio.create_task(self.log_action(
                     guild.id,
-                    f"👋 {member.mention} joined using invite from {used_invite.inviter.mention} (Code: `{used_invite.code}`)",
+                    f"👋 {member.mention} joined using invite from {used_invite.inviter.mention} (Code: `{used_invite.code}` - First time)",
                     discord.Color.blue()
                 ))
                 
@@ -301,6 +402,7 @@ class InviteCog(commands.Cog):
                     )
                     dm_embed.add_field(name="Invite Code", value=f"`{used_invite.code}`", inline=True)
                     dm_embed.add_field(name="Total Invites", value=f"**{inviter_data.get('invite_count', 0) + 1}**", inline=True)
+                    dm_embed.add_field(name="Unique Invites", value=f"**{len(inviter_data.get('invited_user_ids', [])) + 1}**", inline=True)
                     
                     # Get verification role info
                     verified_role_id = server.get("verified_role_id") if server else None
@@ -314,7 +416,7 @@ class InviteCog(commands.Cog):
                         inline=False
                     )
                     
-                    dm_embed.set_footer(text="Keep inviting to earn more points!")
+                    dm_embed.set_footer(text="Keep inviting unique users to earn more points!")
                     
                     await used_invite.inviter.send(embed=dm_embed)
                 except:
@@ -353,6 +455,15 @@ class InviteCog(commands.Cog):
                 if member_data:
                     inviter_id = member_data["inviter_id"]
                     
+                    # Check if already verified (prevent duplicate rewards)
+                    inviter_data = await self.db.users.find_one({"user_id": inviter_id})
+                    if inviter_data:
+                        # Check if this specific user is already verified
+                        for invited in inviter_data.get("invited_users", []):
+                            if invited["user_id"] == after.id and invited.get("verified"):
+                                # Already verified, don't give points again
+                                return
+                    
                     # Get inviter's role config for bonus
                     inviter = after.guild.get_member(inviter_id)
                     bonus_points = 0
@@ -367,6 +478,7 @@ class InviteCog(commands.Cog):
                     
                     total_points = base_invite_points + bonus_points
                     
+                    # Update with verification and increment unique invites
                     await self.db.users.update_one(
                         {
                             "user_id": inviter_id,
@@ -377,6 +489,7 @@ class InviteCog(commands.Cog):
                             "$inc": {
                                 "pending_invites": -1,
                                 "verified_invites": 1,
+                                "unique_invites": 1,  # Increment unique invites
                                 "points": total_points,
                                 "total_earned": total_points
                             }
@@ -402,7 +515,7 @@ class InviteCog(commands.Cog):
                         embed.add_field(name="Member", value=after.name, inline=True)
                         embed.set_thumbnail(url=after.display_avatar.url)
                         
-                        log_message = f"✅ {inviter.mention} received **{total_points}** points for inviting {after.mention} (Verified)"
+                        log_message = f"✅ {inviter.mention} received **{total_points}** points for inviting {after.mention} (Verified - Unique)"
                         if role_name:
                             log_message += f" [Role: {role_name}]"
                         
@@ -438,24 +551,34 @@ class InviteCog(commands.Cog):
                                 
                                 total_points = base_invite_points + bonus_points
                                 
+                                # Check if this is first time verification for this user
+                                is_unique = invited.get("first_time", True)
+                                
+                                update_data = {
+                                    "$set": {"invited_users.$.verified": True},
+                                    "$inc": {
+                                        "pending_invites": -1,
+                                        "verified_invites": 1,
+                                        "points": total_points,
+                                        "total_earned": total_points
+                                    }
+                                }
+                                
+                                if is_unique:
+                                    update_data["$inc"]["unique_invites"] = 1
+                                
                                 await self.db.users.update_one(
                                     {
                                         "user_id": user_data["user_id"],
                                         "invited_users.user_id": after.id
                                     },
-                                    {
-                                        "$set": {"invited_users.$.verified": True},
-                                        "$inc": {
-                                            "pending_invites": -1,
-                                            "verified_invites": 1,
-                                            "points": total_points,
-                                            "total_earned": total_points
-                                        }
-                                    }
+                                    update_data
                                 )
                                 
                                 if inviter:
                                     log_message = f"✅ {inviter.mention} received **{total_points}** points for inviting {after.mention} (Verified - Database Recovery)"
+                                    if is_unique:
+                                        log_message += " [Unique]"
                                     if role_name:
                                         log_message += f" [Role: {role_name}]"
                                     
@@ -507,7 +630,7 @@ class InviteCog(commands.Cog):
                             await self.db.users.update_one(
                                 {"user_id": user_data["user_id"]},
                                 {
-                                    "$inc": {"verified_invites": -1},
+                                    "$inc": {"verified_invites": -1, "unique_invites": -1},
                                     "$pull": {"invited_users": {"user_id": member.id}}
                                 }
                             )
@@ -586,15 +709,21 @@ class InviteCog(commands.Cog):
                 total_invites = user_data.get("invite_count", 0)
                 pending = user_data.get("pending_invites", 0)
                 verified = user_data.get("verified_invites", 0)
+                unique = user_data.get("unique_invites", 0)
+                duplicates = user_data.get("duplicate_invites", 0)
                 fake = user_data.get("fake_invites", 0)
                 
                 embed.add_field(name="📊 Total Invites", value=f"**{total_invites}**", inline=True)
                 embed.add_field(name="✅ Verified", value=f"**{verified}**", inline=True)
                 embed.add_field(name="⏳ Pending", value=f"**{pending}**", inline=True)
                 
+                embed.add_field(name="🎯 Unique Users", value=f"**{unique}**", inline=True)
+                embed.add_field(name="🔄 Duplicates", value=f"**{duplicates}**", inline=True)
+                embed.add_field(name="❌ Left/Fake", value=f"**{fake}**", inline=True)
+                
                 embed.add_field(name="💰 Points Earned", value=f"**{verified * base_invite_points}** base", inline=True)
                 embed.add_field(name="💸 Potential Points", value=f"**{pending * total_points_per_invite}**", inline=True)
-                embed.add_field(name="❌ Left/Fake", value=f"**{fake}**", inline=True)
+                embed.add_field(name="🚫 Blocked Duplicates", value=f"**{duplicates * total_points_per_invite}** points saved", inline=True)
                 
                 if role_name and bonus_points > 0:
                     embed.add_field(
@@ -626,13 +755,24 @@ class InviteCog(commands.Cog):
                     recent_text = []
                     for inv in reversed(recent_invites):
                         status = "✅" if inv.get("verified") else "⏳"
-                        recent_text.append(f"{status} {inv['username']}")
+                        first_time = " 🆕" if inv.get("first_time", True) else " 🔄"
+                        recent_text.append(f"{status} {inv['username']}{first_time}")
                     
                     embed.add_field(
                         name="📋 Recent Invites",
                         value="\n".join(recent_text),
                         inline=False
                     )
+                
+                embed.add_field(
+                    name="ℹ️ Info",
+                    value=(
+                        "🆕 = First time invite (earns points)\n"
+                        "🔄 = Duplicate invite (no points)\n"
+                        "Only unique verified invites earn points!"
+                    ),
+                    inline=False
+                )
             
             guild_invites = await ctx.guild.invites()
             user_invites = [inv for inv in guild_invites if inv.inviter == user]
@@ -648,7 +788,7 @@ class InviteCog(commands.Cog):
                     inline=False
                 )
             
-            embed.set_footer(text=f"Base points per verified invite: {base_invite_points}")
+            embed.set_footer(text=f"Base points per unique verified invite: {base_invite_points}")
             
             await ctx.followup.send(embed=embed)
             
@@ -711,7 +851,7 @@ class InviteCog(commands.Cog):
             embed.add_field(name="Expires", value=f"**{f'{expires} hours' if expires > 0 else 'Never'}**", inline=True)
             
             embed.add_field(
-                name="💰 Points per Verified Invite",
+                name="💰 Points per Unique Verified Invite",
                 value=f"Base: **{base_points}** points",
                 inline=True
             )
@@ -725,8 +865,13 @@ class InviteCog(commands.Cog):
                 )
             
             embed.add_field(
-                name="💡 Tip",
-                value="Share this link to earn points when people join and get verified!",
+                name="💡 Important",
+                value=(
+                    "• Only **first-time** invites earn points\n"
+                    "• Users must get verified role\n"
+                    "• Duplicate invites don't earn points\n"
+                    "• Invite unique users to maximize earnings!"
+                ),
                 inline=False
             )
             
@@ -752,8 +897,11 @@ class InviteCog(commands.Cog):
                         "invite_count": 0,
                         "pending_invites": 0,
                         "verified_invites": 0,
+                        "unique_invites": 0,
+                        "duplicate_invites": 0,
                         "fake_invites": 0,
-                        "invited_users": []
+                        "invited_users": [],
+                        "invited_user_ids": []
                     }
                 }
             )
@@ -778,68 +926,62 @@ class InviteCog(commands.Cog):
             print(f"Error resetting invites: {e}")
             await ctx.followup.send("❌ An error occurred!")
     
-    @commands.hybrid_command(name="syncvites", description="Sync invite data from database (Owner only)")
+    @commands.hybrid_command(name="fixinvites", description="Fix invite data for all users (Owner only)")
     @commands.is_owner()
-    async def syncvites(self, ctx):
+    async def fixinvites(self, ctx):
         try:
             await ctx.defer()
             
-            server = await self.db.servers.find_one({"server_id": ctx.guild.id})
-            verified_role_id = server.get("verified_role_id", 1349289354329198623) if server else 1349289354329198623
-            verified_role = ctx.guild.get_role(verified_role_id)
+            fixed = 0
             
-            if not verified_role:
-                await ctx.followup.send("❌ Verified role not found!")
-                return
-            
-            synced = 0
-            async for user_data in self.db.users.find({"invited_users": {"$exists": True, "$ne": []}}):
-                for invited in user_data.get("invited_users", []):
-                    if not invited.get("verified"):
-                        member_id = invited["user_id"]
-                        member = ctx.guild.get_member(member_id)
-                        
-                        if member and verified_role in member.roles:
-                            config = await self.db.config.find_one({"_id": "bot_config"})
-                            base_invite_points = config.get("point_rates", {}).get("invite", 2)
-                            
-                            # Get inviter's current role config
-                            inviter = ctx.guild.get_member(user_data["user_id"])
-                            bonus_points = 0
-                            
-                            if inviter and server and server.get("role_based"):
-                                role_config = await self.get_user_role_config(inviter, server)
-                                if role_config:
-                                    bonus_points = role_config.get("invite_bonus", 0)
-                            
-                            total_points = base_invite_points + bonus_points
-                            
-                            await self.db.users.update_one(
-                                {
-                                    "user_id": user_data["user_id"],
-                                    "invited_users.user_id": member_id
-                                },
-                                {
-                                    "$set": {"invited_users.$.verified": True},
-                                    "$inc": {
-                                        "pending_invites": -1,
-                                        "verified_invites": 1,
-                                        "points": total_points,
-                                        "total_earned": total_points
-                                    }
-                                }
-                            )
-                            synced += 1
+            # Fix missing fields for all users
+            async for user in self.db.users.find():
+                updates = {}
+                
+                if "invited_user_ids" not in user:
+                    # Build invited_user_ids from invited_users
+                    user_ids = []
+                    for invited in user.get("invited_users", []):
+                        if invited["user_id"] not in user_ids:
+                            user_ids.append(invited["user_id"])
+                    updates["invited_user_ids"] = user_ids
+                
+                if "unique_invites" not in user:
+                    # Count unique verified invites
+                    unique_verified = 0
+                    seen_ids = []
+                    for invited in user.get("invited_users", []):
+                        if invited.get("verified") and invited["user_id"] not in seen_ids:
+                            unique_verified += 1
+                            seen_ids.append(invited["user_id"])
+                    updates["unique_invites"] = unique_verified
+                
+                if "duplicate_invites" not in user:
+                    updates["duplicate_invites"] = 0
+                
+                # Mark all existing invites as first_time
+                if user.get("invited_users"):
+                    for i, invited in enumerate(user["invited_users"]):
+                        if "first_time" not in invited:
+                            updates[f"invited_users.{i}.first_time"] = True
+                
+                if updates:
+                    await self.db.users.update_one(
+                        {"_id": user["_id"]},
+                        {"$set": updates}
+                    )
+                    fixed += 1
             
             embed = discord.Embed(
-                title="✅ Invite Sync Complete",
-                description=f"Synced **{synced}** pending invites that were already verified",
+                title="✅ Invite Data Fixed",
+                description=f"Updated **{fixed}** users with proper invite tracking",
                 color=discord.Color.green()
             )
+            
             await ctx.followup.send(embed=embed)
             
         except Exception as e:
-            print(f"Error syncing invites: {e}")
+            print(f"Error fixing invites: {e}")
             await ctx.followup.send("❌ An error occurred!")
 
 async def setup(bot):

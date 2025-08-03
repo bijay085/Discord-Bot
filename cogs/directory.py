@@ -1,19 +1,22 @@
 # cogs/directory.py
 # Location: cogs/directory.py
-# Description: Updated directory management with enhanced role-based access and new DB structure
+# Description: Directory monitoring that only alerts on changes to analytics channel
 
 import discord
 from discord.ext import commands, tasks
 import os
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
+import json
+import hashlib
 
 class DirectoryCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.db = bot.db
         self.stock_cache = {}
+        self.last_report_hash = None  # Track last report to detect changes
         self.check_directories.start()
         self.update_stock_cache.start()
         
@@ -74,9 +77,14 @@ class DirectoryCog(commands.Cog):
             if not config:
                 return
                 
-            missing_dirs = []
-            low_stock = []
-            critical_stock = []
+            # Prepare report data
+            report_data = {
+                "missing_dirs": [],
+                "critical_stock": [],
+                "low_stock": [],
+                "medium_stock": [],
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
             
             # Check default directories
             if config.get("default_cookies"):
@@ -86,14 +94,17 @@ class DirectoryCog(commands.Cog):
                         continue
                     
                     if not os.path.exists(directory):
-                        missing_dirs.append(f"Default: {cookie_type} - {directory}")
+                        report_data["missing_dirs"].append(f"{cookie_type} - {directory}")
                         Path(directory).mkdir(parents=True, exist_ok=True)
                     else:
                         files_count = self.stock_cache.get(directory, len([f for f in os.listdir(directory) if f.endswith('.txt')]))
+                        
                         if files_count == 0:
-                            critical_stock.append(f"Default: {cookie_type} - EMPTY")
+                            report_data["critical_stock"].append(f"{cookie_type} - EMPTY")
                         elif files_count < 5:
-                            low_stock.append(f"Default: {cookie_type} - {files_count} files")
+                            report_data["low_stock"].append(f"{cookie_type} - {files_count} files")
+                        elif files_count < 20:
+                            report_data["medium_stock"].append(f"{cookie_type} - {files_count} files")
             
             # Check server-specific directories
             async for server in self.db.servers.find({"enabled": True}):
@@ -105,51 +116,117 @@ class DirectoryCog(commands.Cog):
                     if not directory:
                         continue
                     
+                    server_name = server.get('server_name', 'Unknown')[:20]
+                    
                     if not os.path.exists(directory):
-                        missing_dirs.append(f"{server['server_name']}: {cookie_type} - {directory}")
+                        report_data["missing_dirs"].append(f"{server_name}: {cookie_type} - {directory}")
                         Path(directory).mkdir(parents=True, exist_ok=True)
                     else:
                         files_count = self.stock_cache.get(directory, len([f for f in os.listdir(directory) if f.endswith('.txt')]))
+                        
                         if files_count == 0:
-                            critical_stock.append(f"{server['server_name']}: {cookie_type} - EMPTY")
+                            report_data["critical_stock"].append(f"{server_name}: {cookie_type} - EMPTY")
                         elif files_count < 5:
-                            low_stock.append(f"{server['server_name']}: {cookie_type} - {files_count} files")
+                            report_data["low_stock"].append(f"{server_name}: {cookie_type} - {files_count} files")
+                        elif files_count < 20:
+                            report_data["medium_stock"].append(f"{server_name}: {cookie_type} - {files_count} files")
             
-            # Send alert if issues found
-            if missing_dirs or low_stock or critical_stock:
-                main_log = config.get("main_log_channel")
-                if main_log:
-                    channel = self.bot.get_channel(main_log)
-                    if channel:
-                        embed = discord.Embed(
-                            title="📁 Directory Check Report",
-                            color=discord.Color.red() if critical_stock else discord.Color.orange(),
-                            timestamp=datetime.now(timezone.utc)
-                        )
-                        
-                        if critical_stock:
+            # Create hash of current report (excluding timestamp)
+            report_content = {k: v for k, v in report_data.items() if k != "timestamp"}
+            current_hash = hashlib.md5(json.dumps(report_content, sort_keys=True).encode()).hexdigest()
+            
+            # Check if there are any issues
+            has_issues = any([
+                report_data["missing_dirs"],
+                report_data["critical_stock"],
+                report_data["low_stock"]
+            ])
+            
+            # Only send if there are issues AND the report has changed
+            if has_issues and current_hash != self.last_report_hash:
+                # Find analytics channel in ALL servers
+                analytics_sent = False
+                
+                # First try to find in all enabled servers
+                async for server_doc in self.db.servers.find({"enabled": True}):
+                    analytics_channel_id = server_doc.get("channels", {}).get("analytics")
+                    if analytics_channel_id:
+                        channel = self.bot.get_channel(analytics_channel_id)
+                        if channel:
+                            embed = discord.Embed(
+                                title="📁 Directory Status Report",
+                                description=f"Stock check performed at <t:{int(datetime.now(timezone.utc).timestamp())}:F>",
+                                color=discord.Color.red() if report_data["critical_stock"] else discord.Color.orange(),
+                                timestamp=datetime.now(timezone.utc)
+                            )
+                            
+                            if report_data["critical_stock"]:
+                                embed.add_field(
+                                    name="🚨 CRITICAL - Empty Directories",
+                                    value="\n".join(report_data["critical_stock"][:10]) or "None",
+                                    inline=False
+                                )
+                            
+                            if report_data["missing_dirs"]:
+                                embed.add_field(
+                                    name="❌ Missing Directories (Auto-Created)",
+                                    value="\n".join(report_data["missing_dirs"][:10]) or "None",
+                                    inline=False
+                                )
+                            
+                            if report_data["low_stock"]:
+                                embed.add_field(
+                                    name="⚠️ Low Stock Warning",
+                                    value="\n".join(report_data["low_stock"][:10]) or "None",
+                                    inline=False
+                                )
+                            
+                            # Add summary
+                            total_issues = len(report_data["critical_stock"]) + len(report_data["low_stock"]) + len(report_data["missing_dirs"])
                             embed.add_field(
-                                name="🚨 CRITICAL - Empty Directories",
-                                value="\n".join(critical_stock[:10]) or "None",
+                                name="📊 Summary",
+                                value=f"Total Issues: **{total_issues}**\nNext check: <t:{int((datetime.now(timezone.utc) + timedelta(hours=1)).timestamp())}:R>",
                                 inline=False
                             )
-                        
-                        if missing_dirs:
-                            embed.add_field(
-                                name="❌ Missing Directories (Created)",
-                                value="\n".join(missing_dirs[:10]) or "None",
-                                inline=False
+                            
+                            embed.set_footer(text="Automated Directory Monitor • Only sends on changes")
+                            
+                            await channel.send(embed=embed)
+                            analytics_sent = True
+                            
+                            # Store this report hash
+                            self.last_report_hash = current_hash
+                            
+                            # Save last report to database for persistence
+                            await self.db.config.update_one(
+                                {"_id": "directory_monitor"},
+                                {
+                                    "$set": {
+                                        "last_report_hash": current_hash,
+                                        "last_report_time": datetime.now(timezone.utc),
+                                        "last_report_data": report_data
+                                    }
+                                },
+                                upsert=True
                             )
-                        
-                        if low_stock:
-                            embed.add_field(
-                                name="⚠️ Low Stock Warning",
-                                value="\n".join(low_stock[:10]) or "None",
-                                inline=False
-                            )
-                        
-                        embed.set_footer(text="Automated Directory Check")
-                        await channel.send(embed=embed)
+                            
+                            print(f"📊 Directory report sent to analytics channel in {server_doc.get('server_name', 'Unknown')}")
+                            break  # Only send to first analytics channel found
+                
+                if not analytics_sent:
+                    print("⚠️ No analytics channel found in any server!")
+                    
+            elif has_issues and current_hash == self.last_report_hash:
+                print("📁 Directory check: No changes detected, skipping notification")
+            elif not has_issues:
+                print("✅ Directory check: All directories healthy!")
+                # Reset hash when all issues are resolved
+                if self.last_report_hash is not None:
+                    self.last_report_hash = None
+                    await self.db.config.update_one(
+                        {"_id": "directory_monitor"},
+                        {"$set": {"last_report_hash": None}}
+                    )
                         
         except Exception as e:
             print(f"Error in directory check: {e}")
@@ -161,6 +238,12 @@ class DirectoryCog(commands.Cog):
     @check_directories.before_loop
     async def before_check_directories(self):
         await self.bot.wait_until_ready()
+        
+        # Load last report hash from database
+        monitor_data = await self.db.config.find_one({"_id": "directory_monitor"})
+        if monitor_data:
+            self.last_report_hash = monitor_data.get("last_report_hash")
+            print(f"📁 Loaded previous directory report hash: {self.last_report_hash}")
     
     @commands.hybrid_command(name="checkdirs", description="Check all cookie directories (Owner only)")
     async def checkdirs(self, ctx):
@@ -261,11 +344,21 @@ class DirectoryCog(commands.Cog):
         
         embed.description = f"Checked **{checked}** directories | Total Stock: **{total_stock}** files\nStatus: {'✅ All directories OK' if all_good else '⚠️ Issues found'}"
         
+        # Add info about automated monitoring
+        monitor_data = await self.db.config.find_one({"_id": "directory_monitor"})
+        if monitor_data and monitor_data.get("last_report_time"):
+            last_check = monitor_data["last_report_time"]
+            embed.add_field(
+                name="🤖 Automated Monitoring",
+                value=f"Last check: <t:{int(last_check.timestamp())}:R>\nNext check: <t:{int((datetime.now(timezone.utc) + timedelta(hours=1)).timestamp())}:R>",
+                inline=False
+            )
+        
         await ctx.send(embed=embed)
         
         await self.log_action(
             ctx.guild.id,
-            f"📁 {ctx.author.mention} performed directory check",
+            f"📁 {ctx.author.mention} performed manual directory check",
             discord.Color.blue()
         )
     
@@ -345,6 +438,33 @@ Category: {cookie_config.get('category', 'general')}
             f"📁 {ctx.author.mention} created {created} missing directories",
             discord.Color.green()
         )
+    
+    @commands.hybrid_command(name="forcedircheck", description="Force directory check now (Owner only)")
+    async def forcedircheck(self, ctx):
+        if not await self.is_owner(ctx.author.id):
+            await ctx.send("❌ This command is owner only!", ephemeral=True)
+            return
+        
+        await ctx.defer()
+        
+        # Temporarily clear the hash to force a report
+        old_hash = self.last_report_hash
+        self.last_report_hash = None
+        
+        # Run the check
+        await self.check_directories()
+        
+        # Restore if no issues were found
+        if self.last_report_hash is None:
+            self.last_report_hash = old_hash
+        
+        embed = discord.Embed(
+            title="✅ Directory Check Forced",
+            description="Manual directory check completed. Check analytics channel for report if there were changes.",
+            color=discord.Color.green()
+        )
+        
+        await ctx.send(embed=embed)
     
     @commands.hybrid_command(name="setdir", description="Set cookie directory (Owner only)")
     async def setdir(self, ctx, server_id: str, cookie_type: str, *, directory: str):
@@ -455,182 +575,6 @@ Category: {cookie_config.get('category', 'general')}
             embed.set_footer(text=f"Showing first 20 of {len(all_dirs)} directories")
         
         await ctx.send(embed=embed)
-    
-    @commands.hybrid_command(name="syncstock", description="Sync stock across servers with same directories (Owner only)")
-    async def syncstock(self, ctx):
-        if not await self.is_owner(ctx.author.id):
-            await ctx.send("❌ This command is owner only!", ephemeral=True)
-            return
-        
-        await ctx.defer()
-        
-        # Force update cache before sync
-        await self.update_stock_cache()
-        
-        dir_to_servers = {}
-        
-        # Include default directories
-        config = await self.db.config.find_one({"_id": "bot_config"})
-        if config and config.get("default_cookies"):
-            for cookie_type, cookie_config in config["default_cookies"].items():
-                directory = cookie_config.get("directory")
-                if directory:
-                    if directory not in dir_to_servers:
-                        dir_to_servers[directory] = []
-                    dir_to_servers[directory].append({
-                        "server_id": "default",
-                        "server_name": "Default Configuration",
-                        "cookie_type": cookie_type
-                    })
-        
-        # Get server directories
-        async for server in self.db.servers.find():
-            for cookie_type, cookie_config in server.get("cookies", {}).items():
-                directory = cookie_config.get("directory")
-                if directory:
-                    if directory not in dir_to_servers:
-                        dir_to_servers[directory] = []
-                    dir_to_servers[directory].append({
-                        "server_id": server["server_id"],
-                        "server_name": server.get("server_name", "Unknown"),
-                        "cookie_type": cookie_type
-                    })
-        
-        embed = discord.Embed(
-            title="📁 Directory Sync Report",
-            description="Servers sharing the same directories:",
-            color=discord.Color.blue()
-        )
-        
-        shared_count = 0
-        for directory, servers in dir_to_servers.items():
-            if len(servers) > 1:
-                shared_count += 1
-                if len(embed.fields) < 10:
-                    server_list = "\n".join([f"• {s['server_name']}: {s['cookie_type']}" for s in servers[:5]])
-                    if len(servers) > 5:
-                        server_list += f"\n• +{len(servers) - 5} more"
-                    
-                    stock = self.stock_cache.get(directory, "Unknown")
-                    embed.add_field(
-                        name=f"Directory: `{directory[-40:]}`" if len(directory) > 40 else f"Directory: `{directory}`",
-                        value=f"{server_list}\n**Stock: {stock} files**",
-                        inline=False
-                    )
-        
-        embed.description += f"\n\nFound **{shared_count}** shared directories"
-        
-        await ctx.send(embed=embed)
-    
-    @commands.hybrid_command(name="stockreport", description="Generate detailed stock report (Owner only)")
-    async def stockreport(self, ctx):
-        if not await self.is_owner(ctx.author.id):
-            await ctx.send("❌ This command is owner only!", ephemeral=True)
-            return
-        
-        await ctx.defer()
-        
-        # Update cache first
-        await self.update_stock_cache()
-        
-        config = await self.db.config.find_one({"_id": "bot_config"})
-        if not config or not config.get("default_cookies"):
-            await ctx.send("❌ No default cookie configuration found!", ephemeral=True)
-            return
-        
-        # Categorize stock levels
-        categories = {
-            "critical": [],  # 0 files
-            "low": [],       # 1-5 files
-            "medium": [],    # 6-20 files
-            "good": [],      # 21-50 files
-            "excellent": []  # 50+ files
-        }
-        
-        total_cookies = 0
-        total_stock = 0
-        
-        for cookie_type, cookie_config in config["default_cookies"].items():
-            directory = cookie_config.get("directory")
-            if directory and os.path.exists(directory):
-                stock = self.stock_cache.get(directory, 0)
-                total_cookies += 1
-                total_stock += stock
-                
-                item = f"**{cookie_type}**: {stock} files"
-                
-                if stock == 0:
-                    categories["critical"].append(item)
-                elif stock <= 5:
-                    categories["low"].append(item)
-                elif stock <= 20:
-                    categories["medium"].append(item)
-                elif stock <= 50:
-                    categories["good"].append(item)
-                else:
-                    categories["excellent"].append(item)
-        
-        # Create report embed
-        embed = discord.Embed(
-            title="📊 Cookie Stock Report",
-            description=f"Total Cookies: **{total_cookies}** | Total Files: **{total_stock}**",
-            color=discord.Color.red() if categories["critical"] else discord.Color.green(),
-            timestamp=datetime.now(timezone.utc)
-        )
-        
-        if categories["critical"]:
-            embed.add_field(
-                name="🚨 CRITICAL (Empty)",
-                value="\n".join(categories["critical"]) or "None",
-                inline=False
-            )
-        
-        if categories["low"]:
-            embed.add_field(
-                name="⚠️ LOW (1-5 files)",
-                value="\n".join(categories["low"]) or "None",
-                inline=False
-            )
-        
-        if categories["medium"]:
-            embed.add_field(
-                name="🟡 MEDIUM (6-20 files)",
-                value="\n".join(categories["medium"]) or "None",
-                inline=False
-            )
-        
-        if categories["good"]:
-            embed.add_field(
-                name="🟢 GOOD (21-50 files)",
-                value="\n".join(categories["good"]) or "None",
-                inline=False
-            )
-        
-        if categories["excellent"]:
-            embed.add_field(
-                name="💚 EXCELLENT (50+ files)",
-                value="\n".join(categories["excellent"]) or "None",
-                inline=False
-            )
-        
-        # Calculate health score
-        health_score = 0
-        if total_cookies > 0:
-            health_score = (len(categories["good"]) + len(categories["excellent"])) / total_cookies * 100
-        
-        embed.add_field(
-            name="📈 Overall Health",
-            value=f"**{health_score:.1f}%** healthy stock levels",
-            inline=False
-        )
-        
-        await ctx.send(embed=embed)
-        
-        # Also send to main log channel if configured
-        if config.get("main_log_channel"):
-            channel = self.bot.get_channel(config["main_log_channel"])
-            if channel:
-                await channel.send(embed=embed)
 
 async def setup(bot):
     await bot.add_cog(DirectoryCog(bot))

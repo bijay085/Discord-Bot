@@ -4,6 +4,7 @@ from discord import app_commands
 from datetime import datetime, timedelta, timezone
 import traceback
 from typing import Optional
+import asyncio
 
 class FeedbackModal(discord.ui.Modal):
     def __init__(self, cookie_type):
@@ -91,10 +92,12 @@ class FeedbackCog(commands.Cog):
             
             last_claim = user_data["last_claim"]
             
-            if last_claim.get("feedback_given") and last_claim.get("rating"):
+            # Check if feedback is already complete (both text and photo)
+            if last_claim.get("feedback_given") and last_claim.get("screenshot"):
                 await interaction.followup.send("✅ You already submitted complete feedback!", ephemeral=True)
                 return
             
+            # Check if text feedback already submitted
             if last_claim.get("rating"):
                 await interaction.followup.send("✅ You already submitted text feedback! Post a screenshot for bonus points.", ephemeral=True)
                 return
@@ -103,79 +106,54 @@ class FeedbackCog(commands.Cog):
                 await interaction.followup.send("❌ This feedback doesn't match your last claim!", ephemeral=True)
                 return
             
+            # Get user's streak and role config
             current_streak = user_data.get("statistics", {}).get("feedback_streak", 0)
             
             server = await self.db.servers.find_one({"server_id": interaction.guild_id})
             role_config = await self.get_user_role_config(interaction.user, server) if server else {}
             
             trust_multiplier = role_config.get("trust_multiplier", 1.0) if role_config else 1.0
-            base_trust_gain = 0.25
+            base_trust_gain = 0.25  # 0.25 for text feedback
             
-            if rating == 5:
-                await self.db.users.update_one(
-                    {"user_id": interaction.user.id},
-                    {"$inc": {"statistics.perfect_ratings": 1}}
-                )
-                
-                config = await self.db.config.find_one({"_id": "bot_config"})
-                if config and config.get("point_rates", {}).get("perfect_rating_bonus", 0) > 0:
-                    bonus_points = config["point_rates"]["perfect_rating_bonus"]
+            # Handle perfect rating bonus
+            config = await self.db.config.find_one({"_id": "bot_config"})
+            perfect_rating_bonus = 0
+            if rating == 5 and config:
+                perfect_rating_bonus = config.get("point_rates", {}).get("perfect_rating_bonus", 0)
+                if perfect_rating_bonus > 0:
                     await self.db.users.update_one(
                         {"user_id": interaction.user.id},
-                        {"$inc": {"points": bonus_points}}
+                        {"$inc": {"statistics.perfect_ratings": 1}}
                     )
             
-            if last_claim.get("screenshot"):
-                trust_gain = base_trust_gain * trust_multiplier
-                await self.db.users.update_one(
-                    {"user_id": interaction.user.id},
-                    {
-                        "$set": {
-                            "last_claim.feedback_given": True,
-                            "last_claim.rating": rating,
-                            "last_claim.feedback_text": feedback
-                        },
-                        "$inc": {
-                            "trust_score": trust_gain
-                        }
-                    }
-                )
-                trust_text = f"+{trust_gain:.2f} points (Total: {0.5 * trust_multiplier + trust_gain:.2f})"
-                is_complete = True
-                
-                stars = "⭐" * rating
-                await self.log_action(
-                    interaction.guild_id,
-                    f"📝 {interaction.user.mention} added text feedback for **{last_claim['type']}** cookie {stars} - \"{feedback[:50]}{'...' if len(feedback) > 50 else ''}\"",
-                    discord.Color.green()
-                )
-            else:
-                trust_gain = base_trust_gain * trust_multiplier
-                await self.db.users.update_one(
-                    {"user_id": interaction.user.id},
-                    {
-                        "$set": {
-                            "last_claim.feedback_given": False,
-                            "last_claim.rating": rating,
-                            "last_claim.feedback_text": feedback,
-                            "last_claim.text_feedback_only": True
-                        },
-                        "$inc": {
-                            "trust_score": trust_gain,
-                            "statistics.feedback_streak": 1
-                        }
-                    }
-                )
-                trust_text = f"+{trust_gain:.2f} points"
-                is_complete = False
-                
-                stars = "⭐" * rating
-                await self.log_action(
-                    interaction.guild_id,
-                    f"📝 {interaction.user.mention} submitted text feedback for **{last_claim['type']}** cookie {stars} - \"{feedback[:50]}{'...' if len(feedback) > 50 else ''}\" (Photo pending)",
-                    discord.Color.gold()
-                )
+            # Apply trust gain for text feedback
+            trust_gain = base_trust_gain * trust_multiplier
             
+            # Update user data with text feedback
+            update_data = {
+                "$set": {
+                    "last_claim.rating": rating,
+                    "last_claim.feedback_text": feedback,
+                    "last_claim.text_feedback_given": True,
+                    "last_claim.text_feedback_time": datetime.now(timezone.utc)
+                },
+                "$inc": {
+                    "trust_score": trust_gain,
+                    "statistics.feedback_streak": 1
+                }
+            }
+            
+            # Add perfect rating bonus if applicable
+            if perfect_rating_bonus > 0:
+                update_data["$inc"]["points"] = perfect_rating_bonus
+                update_data["$inc"]["total_earned"] = perfect_rating_bonus
+            
+            await self.db.users.update_one(
+                {"user_id": interaction.user.id},
+                update_data
+            )
+            
+            # Insert feedback record
             await self.db.feedback.insert_one({
                 "user_id": interaction.user.id,
                 "cookie_type": last_claim["type"],
@@ -184,10 +162,12 @@ class FeedbackCog(commands.Cog):
                 "feedback": feedback,
                 "timestamp": datetime.now(timezone.utc),
                 "server_id": interaction.guild_id,
-                "has_screenshot": last_claim.get("screenshot", False),
-                "trust_multiplier_applied": trust_multiplier
+                "has_screenshot": False,  # Will be updated when photo is posted
+                "trust_multiplier_applied": trust_multiplier,
+                "feedback_type": "text_only"
             })
             
+            # Create response embed
             stars = "⭐" * rating
             embed = discord.Embed(
                 title="✅ Text Feedback Submitted!",
@@ -195,8 +175,15 @@ class FeedbackCog(commands.Cog):
                 color=discord.Color.green()
             )
             embed.add_field(name="Rating", value=stars, inline=True)
-            embed.add_field(name="Trust Score", value=trust_text, inline=True)
+            embed.add_field(name="Trust Score", value=f"+{trust_gain:.2f} points", inline=True)
             embed.add_field(name="Streak", value=f"{current_streak + 1} feedback(s)", inline=True)
+            
+            if perfect_rating_bonus > 0:
+                embed.add_field(
+                    name="🎉 Perfect Rating Bonus!",
+                    value=f"+{perfect_rating_bonus} points",
+                    inline=True
+                )
             
             if role_config and trust_multiplier > 1.0:
                 embed.add_field(
@@ -205,21 +192,29 @@ class FeedbackCog(commands.Cog):
                     inline=False
                 )
             
-            if not is_complete:
-                if server and server.get("channels", {}).get("feedback"):
-                    embed.add_field(
-                        name="📸 Don't Forget!",
-                        value=f"Post your screenshot in <#{server['channels']['feedback']}> for bonus points!",
-                        inline=False
-                    )
-            else:
+            # Always remind about screenshot
+            if server and server.get("channels", {}).get("feedback"):
                 embed.add_field(
-                    name="🎉 Complete!",
-                    value="You've submitted both text and photo feedback!",
+                    name="📸 Next Step: Screenshot Required!",
+                    value=f"Post your screenshot in <#{server['channels']['feedback']}> to:\n"
+                          f"• Complete your feedback\n"
+                          f"• Get +{0.25 * trust_multiplier:.2f} more trust\n"
+                          f"• Earn bonus points\n"
+                          f"• Avoid blacklist",
                     inline=False
                 )
             
+            embed.set_footer(text="⚠️ Screenshot still required to avoid blacklist!")
+            
             await interaction.followup.send(embed=embed, ephemeral=True)
+            
+            # Log the text feedback
+            stars = "⭐" * rating
+            await self.log_action(
+                interaction.guild_id,
+                f"📝 {interaction.user.mention} submitted text feedback for **{last_claim['type']}** cookie {stars} - \"{feedback[:50]}{'...' if len(feedback) > 50 else ''}\" (Photo pending)",
+                discord.Color.gold()
+            )
             
         except discord.NotFound:
             print(f"Interaction expired for user {interaction.user.id}")
@@ -242,9 +237,12 @@ class FeedbackCog(commands.Cog):
         try:
             now = datetime.now(timezone.utc)
             
+            # Find users who haven't given ANY feedback (text or photo)
             cursor = self.db.users.find({
                 "last_claim.feedback_given": False,
                 "last_claim.feedback_deadline": {"$lt": now},
+                "last_claim.text_feedback_given": {"$ne": True},  # No text feedback
+                "last_claim.screenshot": {"$ne": True},  # No screenshot
                 "blacklisted": False
             })
             
@@ -272,7 +270,7 @@ class FeedbackCog(commands.Cog):
                     blacklist_duration = settings.get("feedback_blacklist_days", 30)
                     
                     current_trust = user.get("trust_score", 50)
-                    new_trust = max(0, current_trust - 1)
+                    new_trust = max(0, current_trust - 5)  # Bigger penalty for no feedback
                     
                     await self.db.users.update_one(
                         {"user_id": user["user_id"]},
@@ -280,6 +278,7 @@ class FeedbackCog(commands.Cog):
                             "$set": {
                                 "blacklisted": True,
                                 "blacklist_expires": now + timedelta(days=blacklist_duration),
+                                "blacklist_reason": "No feedback provided",
                                 "statistics.feedback_streak": 0,
                                 "trust_score": new_trust
                             }
@@ -304,6 +303,7 @@ class FeedbackCog(commands.Cog):
                                 )
                                 embed.add_field(name="Duration", value=f"{blacklist_duration} days", inline=True)
                                 embed.add_field(name="Expires", value=f"<t:{int((now + timedelta(days=blacklist_duration)).timestamp())}:R>", inline=True)
+                                embed.add_field(name="Trust Lost", value=f"-5 points (now {new_trust}/100)", inline=True)
                                 await user_obj.send(embed=embed)
                         except:
                             pass
@@ -344,7 +344,8 @@ class FeedbackCog(commands.Cog):
             
             last_claim = user_data["last_claim"]
             
-            if last_claim.get("feedback_given") and last_claim.get("rating"):
+            # Check if complete feedback already given
+            if last_claim.get("feedback_given") and last_claim.get("screenshot"):
                 embed = discord.Embed(
                     title="✅ Already Submitted",
                     description="You've already submitted complete feedback for your last cookie!",
@@ -371,6 +372,25 @@ class FeedbackCog(commands.Cog):
                 description=f"Click the button below to submit feedback for your **{last_claim['type']}** cookie!",
                 color=discord.Color.blue()
             )
+            
+            # Show current status
+            status_text = []
+            if last_claim.get("rating"):
+                status_text.append("✅ Text feedback submitted")
+            else:
+                status_text.append("❌ Text feedback needed")
+                
+            if last_claim.get("screenshot"):
+                status_text.append("✅ Screenshot submitted")
+            else:
+                status_text.append("❌ Screenshot needed")
+            
+            embed.add_field(
+                name="📊 Current Status",
+                value="\n".join(status_text),
+                inline=False
+            )
+            
             embed.add_field(
                 name="⏰ Deadline",
                 value=f"<t:{int(deadline.timestamp())}:R>",
@@ -422,68 +442,118 @@ class FeedbackCog(commands.Cog):
                     if user_data and user_data.get("last_claim"):
                         last_claim = user_data["last_claim"]
                         
+                        # Check if screenshot already submitted
                         if last_claim.get("screenshot"):
                             return
                         
+                        # Verify it's an image
                         image_extensions = ['.png', '.jpg', '.jpeg', '.gif', '.webp']
                         has_image = any(att.filename.lower().endswith(ext.lower()) for att in message.attachments for ext in image_extensions)
                         
                         if has_image:
                             cookie_type = last_claim.get("type", "unknown")
                             
+                            # Get role config for trust multiplier
                             role_config = await self.get_user_role_config(message.author, server)
                             trust_multiplier = role_config.get("trust_multiplier", 1.0) if role_config else 1.0
                             
+                            # Get feedback bonus points from config
                             config = await self.db.config.find_one({"_id": "bot_config"})
                             feedback_bonus_points = config.get("point_rates", {}).get("feedback_bonus", 1) if config else 1
                             
-                            if last_claim.get("text_feedback_only"):
-                                bonus = 0.5 * trust_multiplier
-                                embed_title = "🎉 Feedback Complete!"
-                                trust_text = f"+{bonus:.2f} points (Total: {0.75 * trust_multiplier:.2f})"
-                                is_complete = True
-                                
+                            # Calculate trust gain for screenshot
+                            screenshot_trust = 0.25 * trust_multiplier
+                            
+                            # Check if text feedback was already given
+                            has_text_feedback = last_claim.get("rating") is not None
+                            
+                            if has_text_feedback:
+                                # Complete feedback (text + photo)
                                 await self.db.users.update_one(
                                     {"user_id": message.author.id},
                                     {
                                         "$set": {
                                             "last_claim.feedback_given": True,
-                                            "last_claim.screenshot": True
+                                            "last_claim.screenshot": True,
+                                            "last_claim.screenshot_time": datetime.now(timezone.utc),
+                                            "last_claim.screenshot_url": message.attachments[0].url
                                         },
                                         "$inc": {
-                                            "trust_score": bonus,
-                                            "points": feedback_bonus_points
+                                            "trust_score": screenshot_trust,
+                                            "points": feedback_bonus_points,
+                                            "total_earned": feedback_bonus_points
                                         }
                                     }
                                 )
                                 
-                                stars = "⭐" * last_claim.get("rating", 0) if last_claim.get("rating") else ""
-                                feedback_text = f" - \"{last_claim.get('feedback_text', '')[:50]}{'...' if len(last_claim.get('feedback_text', '')) > 50 else ''}\"" if last_claim.get('feedback_text') else ""
+                                # Update existing feedback record
+                                await self.db.feedback.update_one(
+                                    {
+                                        "user_id": message.author.id,
+                                        "cookie_type": cookie_type,
+                                        "timestamp": {"$gte": datetime.now(timezone.utc) - timedelta(minutes=30)}
+                                    },
+                                    {
+                                        "$set": {
+                                            "has_screenshot": True,
+                                            "screenshot_url": message.attachments[0].url,
+                                            "feedback_type": "complete"
+                                        }
+                                    }
+                                )
+                                
+                                embed_title = "🎉 Feedback Complete!"
+                                embed_description = "Both text and screenshot submitted!"
+                                total_trust = 0.5 * trust_multiplier  # 0.25 + 0.25
+                                
+                                # Log complete feedback
+                                stars = "⭐" * last_claim.get("rating", 0)
+                                feedback_text = last_claim.get('feedback_text', '')[:50]
+                                if len(last_claim.get('feedback_text', '')) > 50:
+                                    feedback_text += "..."
                                 
                                 await self.log_action(
                                     message.guild.id,
-                                    f"🎉 {message.author.mention} completed feedback for **{cookie_type}** cookie with screenshot {stars}{feedback_text}",
+                                    f"🎉 {message.author.mention} completed feedback for **{cookie_type}** cookie with screenshot {stars} - \"{feedback_text}\"",
                                     discord.Color.green()
                                 )
                             else:
-                                bonus = 0.5 * trust_multiplier
-                                embed_title = "📸 Screenshot Received!"
-                                trust_text = f"+{bonus:.2f} points"
-                                is_complete = False
-                                
+                                # Only screenshot (no text yet)
                                 await self.db.users.update_one(
                                     {"user_id": message.author.id},
                                     {
                                         "$set": {
-                                            "last_claim.screenshot": True
+                                            "last_claim.screenshot": True,
+                                            "last_claim.screenshot_time": datetime.now(timezone.utc),
+                                            "last_claim.screenshot_url": message.attachments[0].url
                                         },
                                         "$inc": {
-                                            "trust_score": bonus,
+                                            "trust_score": screenshot_trust,
                                             "statistics.feedback_streak": 1,
-                                            "points": feedback_bonus_points
+                                            "points": feedback_bonus_points,
+                                            "total_earned": feedback_bonus_points
                                         }
                                     }
                                 )
+                                
+                                # Create new feedback record for screenshot only
+                                await self.db.feedback.insert_one({
+                                    "user_id": message.author.id,
+                                    "cookie_type": cookie_type,
+                                    "file": last_claim["file"],
+                                    "rating": None,
+                                    "feedback": None,
+                                    "timestamp": datetime.now(timezone.utc),
+                                    "server_id": message.guild.id,
+                                    "has_screenshot": True,
+                                    "screenshot_url": message.attachments[0].url,
+                                    "trust_multiplier_applied": trust_multiplier,
+                                    "feedback_type": "screenshot_only"
+                                })
+                                
+                                embed_title = "📸 Screenshot Received!"
+                                embed_description = "Photo submitted! Use `/feedback` for text review."
+                                total_trust = screenshot_trust
                                 
                                 await self.log_action(
                                     message.guild.id,
@@ -491,20 +561,34 @@ class FeedbackCog(commands.Cog):
                                     discord.Color.gold()
                                 )
                             
+                            # Add reactions
                             await message.add_reaction("✅")
                             await message.add_reaction("📸")
+                            if has_text_feedback:
+                                await message.add_reaction("🎉")
                             
                             try:
                                 embed = discord.Embed(
                                     title=embed_title,
-                                    description=f"Thank you for the screenshot!",
+                                    description=embed_description,
                                     color=discord.Color.green()
                                 )
-                                embed.add_field(name="Trust Score", value=trust_text, inline=True)
-                                embed.add_field(name="Cookie Type", value=cookie_type.title(), inline=True)
                                 
-                                if feedback_bonus_points > 0:
-                                    embed.add_field(name="Bonus Points", value=f"+{feedback_bonus_points}", inline=True)
+                                embed.add_field(
+                                    name="🏆 Trust Score", 
+                                    value=f"+{total_trust:.2f} points",
+                                    inline=True
+                                )
+                                embed.add_field(
+                                    name="💰 Bonus Points",
+                                    value=f"+{feedback_bonus_points}",
+                                    inline=True
+                                )
+                                embed.add_field(
+                                    name="🍪 Cookie Type",
+                                    value=cookie_type.title(),
+                                    inline=True
+                                )
                                 
                                 if role_config and trust_multiplier > 1.0:
                                     embed.add_field(
@@ -513,10 +597,16 @@ class FeedbackCog(commands.Cog):
                                         inline=False
                                     )
                                 
-                                if not is_complete:
+                                if not has_text_feedback:
                                     embed.add_field(
-                                        name="💡 Tip",
-                                        value="Use `/feedback` to add a text review for bonus points!",
+                                        name="💡 Next Step",
+                                        value="Use `/feedback` to add a text review for more trust points!",
+                                        inline=False
+                                    )
+                                else:
+                                    embed.add_field(
+                                        name="✅ Status",
+                                        value="Feedback complete! Thank you!",
                                         inline=False
                                     )
                                 
@@ -527,7 +617,7 @@ class FeedbackCog(commands.Cog):
             except discord.HTTPException:
                 pass
             except Exception as e:
-                print(f"Error processing feedback attachment: {e}")
+                print(f"Error processing feedback attachment: {traceback.format_exc()}")
 
     @check_feedback_deadlines.before_loop
     async def before_check_feedback_deadlines(self):
