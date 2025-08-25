@@ -4,3 +4,4 @@ cookies/
 bot.log
 bot_core/__pycache__/
 entertainment/__pycache__/
+.vercel
