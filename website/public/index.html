@@ -3,95 +3,225 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Cookie Bot Status</title>
+    <title>Cookie Bot - Premium Discord Bot</title>
+    <meta name="description" content="Cookie Bot - Your premium Discord cookie distribution system with points, games, and rewards!">
+    <meta name="keywords" content="discord bot, cookie bot, points system, daily rewards">
+    <meta property="og:title" content="Cookie Bot Dashboard">
+    <meta property="og:description" content="Check bot status and claim your daily points!">
+    <meta property="og:type" content="website">
+    <meta name="robots" content="index, follow">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍪</text></svg>">
     <link rel="stylesheet" href="styles.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 </head>
 <body>
-    <div class="container">
-        <div class="header">
-            <h1>🍪 Cookie Bot Status</h1>
-        </div>
-        
-        <div id="loading" class="loading">
-            <div class="spinner"></div>
-            <p class="loading-text">Connecting to server...</p>
-        </div>
-        
-        <div id="content" style="display: none;">
-            <div class="status-card">
-                <div class="status-indicator">
-                    <span class="status-dot" id="statusDot"></span>
-                    <span class="status-text" id="statusText">CHECKING...</span>
-                </div>
-                
-                <div class="stats-grid">
-                    <div class="stat-card">
-                        <div class="stat-value" id="totalUsers">-</div>
-                        <div class="stat-label">Total Users</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-value" id="activeUsers">-</div>
-                        <div class="stat-label">Active Today</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-value" id="totalServers">-</div>
-                        <div class="stat-label">Servers</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-value" id="totalCookies">-</div>
-                        <div class="stat-label">Cookies Claimed</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-value" id="uptime">-</div>
-                        <div class="stat-label">Last Seen</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-value" id="onlineStatus">-</div>
-                        <div class="stat-label">Status</div>
-                    </div>
-                </div>
-            </div>
-            
-            <div class="daily-section">
-                <h3>🎁 Claim Daily Points</h3>
-                <p>Get 2 points daily! (Use Discord bot for role bonuses)</p>
-                
-                <div class="input-group">
-                    <input type="text" 
-                           id="discordId" 
-                           class="daily-input" 
-                           placeholder="Your Discord ID (e.g., 123456789)"
-                           maxlength="20"
-                           pattern="[0-9]+">
-                    <input type="text" 
-                           id="username" 
-                           class="daily-input" 
-                           placeholder="Your Username"
-                           maxlength="32">
-                </div>
-                
-                <button id="claimButton" class="daily-button" onclick="claimDaily()">
-                    CLAIM DAILY POINTS
-                </button>
-                
-                <div id="dailyResult"></div>
-            </div>
-            
-            <div class="section">
-                <h3>🏆 Top Users</h3>
-                <div id="leaderboard" class="leaderboard"></div>
-            </div>
-            
-            <div class="section">
-                <h3>📊 Recent Activity</h3>
-                <div id="recentActivity"></div>
-            </div>
-            
-            <div id="lastUpdate"></div>
+    <!-- Anti-bot honeypot fields (hidden) -->
+    <input type="text" id="hp_name" style="display:none" tabindex="-1" autocomplete="off">
+    <input type="email" id="hp_email" style="display:none" tabindex="-1" autocomplete="off">
+    
+    <!-- Loading Screen -->
+    <div id="loadingScreen" class="loading-screen">
+        <div class="loading-content">
+            <div class="cookie-loader">🍪</div>
+            <h2>Cookie Bot</h2>
+            <p>Connecting to server...</p>
         </div>
     </div>
+
+    <!-- Main Container -->
+    <div class="container" id="mainContainer" style="display: none;">
+        <!-- Header Section -->
+        <header class="header">
+            <div class="header-content">
+                <div class="logo-section">
+                    <span class="logo">🍪</span>
+                    <div>
+                        <h1>Cookie Bot</h1>
+                        <p class="tagline">Premium Discord Bot System</p>
+                    </div>
+                </div>
+                <div class="status-badge" id="statusBadge">
+                    <span class="status-dot" id="statusDot"></span>
+                    <span id="statusText">Checking...</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Stats Grid -->
+        <section class="stats-section" id="statsSection">
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-icon">👥</div>
+                    <div class="stat-info">
+                        <span class="stat-value" id="totalUsers">-</span>
+                        <span class="stat-label">Total Users</span>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon">🏆</div>
+                    <div class="stat-info">
+                        <span class="stat-value" id="totalPoints">-</span>
+                        <span class="stat-label">Points Distributed</span>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon">🍪</div>
+                    <div class="stat-info">
+                        <span class="stat-value" id="totalCookies">-</span>
+                        <span class="stat-label">Cookies Claimed</span>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon">⚡</div>
+                    <div class="stat-info">
+                        <span class="stat-value" id="activeToday">-</span>
+                        <span class="stat-label">Active Today</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Daily Claim Section -->
+        <section class="claim-section" id="claimSection">
+            <div class="claim-card">
+                <div class="claim-header">
+                    <h2>🎁 Daily Points Claim</h2>
+                    <div class="claim-timer" id="claimTimer" style="display: none;">
+                        Next claim in: <span id="timerValue">--:--:--</span>
+                    </div>
+                </div>
+                
+                <div class="claim-info">
+                    <p>Claim your daily <strong>2 points</strong> every 24 hours!</p>
+                    <small>💡 Join our Discord server for role bonuses up to 20+ points!</small>
+                </div>
+
+                <form id="claimForm" class="claim-form">
+                    <div class="input-group">
+                        <div class="input-wrapper">
+                            <label for="userId">Discord User ID</label>
+                            <input 
+                                type="text" 
+                                id="userId" 
+                                name="userId"
+                                placeholder="e.g., 123456789012345678" 
+                                maxlength="20"
+                                pattern="[0-9]{17,20}"
+                                required
+                                autocomplete="off"
+                            >
+                            <small class="input-hint">Your 18-digit Discord ID</small>
+                        </div>
+                        <div class="input-wrapper">
+                            <label for="username">Username</label>
+                            <input 
+                                type="text" 
+                                id="username" 
+                                name="username"
+                                placeholder="e.g., CookieLover" 
+                                maxlength="32"
+                                minlength="2"
+                                required
+                                autocomplete="off"
+                            >
+                            <small class="input-hint">Your Discord username</small>
+                        </div>
+                    </div>
+
+                    <!-- Hidden timestamp for anti-bot -->
+                    <input type="hidden" id="formTimestamp" name="timestamp">
+                    
+                    <!-- Captcha placeholder -->
+                    <div id="captchaContainer" class="captcha-container" style="display: none;">
+                        <div class="simple-captcha">
+                            <span id="captchaQuestion"></span>
+                            <input 
+                                type="text" 
+                                id="captchaAnswer" 
+                                placeholder="Answer"
+                                autocomplete="off"
+                            >
+                        </div>
+                    </div>
+
+                    <button type="submit" id="claimButton" class="claim-button">
+                        <span class="button-text">CLAIM DAILY POINTS</span>
+                        <span class="button-loader" style="display: none;">
+                            <span class="spinner"></span>
+                        </span>
+                    </button>
+                </form>
+
+                <div id="claimResult" class="claim-result"></div>
+            </div>
+        </section>
+
+        <!-- Leaderboard Section -->
+        <section class="leaderboard-section" id="leaderboardSection">
+            <h2>🏆 Top Users</h2>
+            <div class="leaderboard" id="leaderboard">
+                <div class="leaderboard-loading">Loading leaderboard...</div>
+            </div>
+        </section>
+
+        <!-- Info Cards -->
+        <section class="info-section">
+            <div class="info-grid">
+                <div class="info-card">
+                    <h3>🎮 Games Available</h3>
+                    <ul>
+                        <li>🎰 Slots Machine</li>
+                        <li>🎲 Number Betting</li>
+                        <li>🎭 Rob System</li>
+                        <li>💎 Divine Gamble</li>
+                    </ul>
+                </div>
+                <div class="info-card">
+                    <h3>🍪 Cookie Types</h3>
+                    <ul>
+                        <li>🎬 Netflix Premium</li>
+                        <li>🎵 Spotify Premium</li>
+                        <li>🤖 ChatGPT Plus</li>
+                        <li>📈 TradingView Pro</li>
+                    </ul>
+                </div>
+                <div class="info-card">
+                    <h3>💎 Role Benefits</h3>
+                    <ul>
+                        <li>⭐ Premium: +5 daily</li>
+                        <li>💎 VIP: +10 daily</li>
+                        <li>🎯 Elite: +20 daily</li>
+                        <li>🚀 Booster: +30 daily</li>
+                    </ul>
+                </div>
+            </div>
+        </section>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <p>&copy; 2024 Cookie Bot. All rights reserved.</p>
+            <p class="footer-links">
+                <a href="#" id="discordLink">Join Discord</a> • 
+                <a href="#" id="docsLink">Documentation</a> • 
+                <a href="#" id="supportLink">Support</a>
+            </p>
+            <p class="update-time" id="lastUpdate">Last updated: Never</p>
+        </footer>
+    </div>
+
+    <!-- Toast Container -->
+    <div id="toastContainer" class="toast-container"></div>
+
+    <!-- Anti-bot Protection -->
+    <script>
+        // Basic anti-bot protection
+        window._startTime = Date.now();
+        window._interactions = 0;
+    </script>
     
+    <script src="security.js"></script>
     <script src="script.js"></script>
 </body>
 </html>

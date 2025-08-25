@@ -2,9 +2,14 @@
   "functions": {
     "api/status.js": {
       "maxDuration": 10
+    },
+    "api/daily.js": {
+      "maxDuration": 10
     }
   },
   "rewrites": [
-    { "source": "/", "destination": "/public/index.html" }
+    { "source": "/", "destination": "/public/index.html" },
+    { "source": "/styles.css", "destination": "/public/styles.css" },
+    { "source": "/script.js", "destination": "/public/script.js" }
   ]
 }

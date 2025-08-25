@@ -1,383 +1,538 @@
-// script.js - Cookie Bot Status JavaScript (Updated)
+// Cookie Bot - Main Application Script
 
-// Utility Functions
-function isValidDiscordId(id) {
-    return /^\d{17,20}$/.test(id);
+// State Management
+const AppState = {
+    isOnline: false,
+    userData: null,
+    rateLimitActive: false,
+    lastClaimAttempt: 0,
+    attemptCount: 0
+};
+
+// Configuration - Update this with your actual API endpoint
+const Config = {
+    API_BASE: '', // Will be set based on environment
+    UPDATE_INTERVAL: 30000,
+    MAX_ATTEMPTS: 3,
+    RATE_LIMIT_WINDOW: 60000,
+    MIN_REQUEST_INTERVAL: 2000
+};
+
+// Set API base URL based on environment
+if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+    Config.API_BASE = 'http://localhost:3000/api';
+} else {
+    // Update this with your Vercel app URL
+    Config.API_BASE = window.location.origin + '/api';
 }
 
-function isValidUsername(username) {
-    return username.length >= 2 && username.length <= 32;
-}
+// Initialize Application
+document.addEventListener('DOMContentLoaded', function() {
+    console.log('Initializing Cookie Bot...');
+    initializeApp();
+});
 
-function formatTimeAgo(date) {
-    const now = new Date();
-    const diff = Math.floor((now - date) / 1000);
-    
-    if (diff < 60) return 'Just now';
-    if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
-    if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
-    return Math.floor(diff / 86400) + 'd ago';
-}
+// Application Initialization
+async function initializeApp() {
+    try {
+        // Hide honeypot field
+        const honeypot = document.getElementById('hpt');
+        if (honeypot) {
+            honeypot.style.display = 'none';
+        }
 
-// Toast Notification System
-function showToast(message, type = 'info') {
-    const existingToast = document.querySelector('.toast');
-    if (existingToast) existingToast.remove();
-    
-    const toast = document.createElement('div');
-    toast.className = `toast ${type}`;
-    toast.textContent = message;
-    document.body.appendChild(toast);
-    
-    setTimeout(() => toast.remove(), 5000);
-}
-
-// Local Storage Functions
-function saveUserInfo() {
-    const userId = document.getElementById('discordId').value;
-    const username = document.getElementById('username').value;
-    if (userId && username) {
-        localStorage.setItem('discordId', userId);
-        localStorage.setItem('username', username);
+        // Load saved data
+        loadSavedData();
+        
+        // Initial status update
+        await updateBotStatus();
+        
+        // Setup event listeners
+        setupEventListeners();
+        
+        // Start auto update
+        startAutoUpdate();
+        
+        // Show content
+        showContent();
+        
+    } catch (error) {
+        console.error('Initialization error:', error);
+        showOfflineStatus();
     }
 }
 
-function loadUserInfo() {
-    const savedId = localStorage.getItem('discordId');
-    const savedUsername = localStorage.getItem('username');
-    if (savedId) document.getElementById('discordId').value = savedId;
-    if (savedUsername) document.getElementById('username').value = savedUsername;
+// Show content after loading
+function showContent() {
+    const loading = document.querySelector('.loading');
+    const content = document.getElementById('content');
+    
+    if (loading) {
+        loading.style.display = 'none';
+    }
+    
+    if (content) {
+        content.style.display = 'block';
+    }
+}
+
+// Show offline status
+function showOfflineStatus() {
+    showContent();
+    updateStatusDisplay({ 
+        online: false,
+        totalUsers: 0,
+        totalServers: 0,
+        totalCookies: 0,
+        lastActivity: null,
+        leaderboard: []
+    });
+}
+
+// Load Saved User Data
+function loadSavedData() {
+    try {
+        const savedId = localStorage.getItem('discordId');
+        const savedUsername = localStorage.getItem('username');
+        
+        if (savedId && isValidDiscordId(savedId)) {
+            document.getElementById('discordId').value = savedId;
+        }
+        
+        if (savedUsername && isValidUsername(savedUsername)) {
+            document.getElementById('username').value = savedUsername;
+        }
+    } catch (e) {
+        console.error('Failed to load saved data:', e);
+    }
+}
+
+// Save User Data
+function saveUserData(userId, username) {
+    try {
+        localStorage.setItem('discordId', userId);
+        localStorage.setItem('username', username);
+    } catch (e) {
+        console.error('Failed to save user data:', e);
+    }
+}
+
+// Validation Functions
+function isValidDiscordId(id) {
+    return /^[0-9]{17,20}$/.test(id);
+}
+
+function isValidUsername(username) {
+    return username && username.length >= 2 && username.length <= 32 && 
+           /^[a-zA-Z0-9_.-]+$/.test(username);
+}
+
+// Update Bot Status
+async function updateBotStatus() {
+    try {
+        console.log('Fetching status from:', Config.API_BASE + '/status');
+        
+        const response = await fetch(`${Config.API_BASE}/status`, {
+            method: 'GET',
+            headers: {
+                'Accept': 'application/json'
+            }
+        });
+        
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        
+        const data = await response.json();
+        console.log('Status data received:', data);
+        
+        updateStatusDisplay(data);
+        updateLeaderboard(data.leaderboard || []);
+        
+    } catch (error) {
+        console.error('Failed to update status:', error);
+        showOfflineStatus();
+    }
 }
 
 // Update Status Display
 function updateStatusDisplay(data) {
     const statusDot = document.getElementById('statusDot');
     const statusText = document.getElementById('statusText');
-    const onlineStatus = document.getElementById('onlineStatus');
     
-    if (data.online) {
-        statusDot.className = 'status-dot online';
-        statusText.textContent = 'ONLINE';
-        statusText.style.color = '#4caf50';
-        onlineStatus.textContent = '🟢';
-        
-        // Only show toast on initial load or status change
-        if (!window.lastOnlineStatus || window.lastOnlineStatus !== data.online) {
-            showToast('Bot is online!', 'success');
-        }
-    } else {
-        statusDot.className = 'status-dot offline';
-        statusText.textContent = 'OFFLINE';
-        statusText.style.color = '#f44336';
-        onlineStatus.textContent = '🔴';
-        
-        // Show offline toast if status changed
-        if (window.lastOnlineStatus === true) {
-            showToast('Bot went offline', 'warning');
+    AppState.isOnline = data.online || false;
+    
+    if (statusDot && statusText) {
+        if (AppState.isOnline) {
+            statusDot.classList.add('online');
+            statusDot.classList.remove('offline');
+            statusText.textContent = 'ONLINE';
+            statusText.style.color = '#3BA55C';
+        } else {
+            statusDot.classList.remove('online');
+            statusDot.classList.add('offline');
+            statusText.textContent = 'OFFLINE';
+            statusText.style.color = '#ED4245';
         }
     }
     
-    window.lastOnlineStatus = data.online;
-}
-
-// Update Statistics
-function updateStatistics(data) {
-    document.getElementById('totalUsers').textContent = data.totalUsers?.toLocaleString() || '0';
-    document.getElementById('activeUsers').textContent = data.activeUsers?.toLocaleString() || '0';
-    document.getElementById('totalServers').textContent = data.totalServers?.toLocaleString() || '0';
-    document.getElementById('totalCookies').textContent = data.totalCookies?.toLocaleString() || '0';
+    // Update stats
+    const totalUsers = document.getElementById('totalUsers');
+    const totalServers = document.getElementById('totalServers');
+    const totalCookies = document.getElementById('totalCookies');
+    const lastActivity = document.getElementById('lastActivity');
     
-    if (data.lastSeen) {
-        const lastSeen = new Date(data.lastSeen);
-        document.getElementById('uptime').textContent = formatTimeAgo(lastSeen);
+    if (totalUsers) totalUsers.textContent = formatNumber(data.totalUsers || 0);
+    if (totalServers) totalServers.textContent = formatNumber(data.totalServers || 0);
+    if (totalCookies) totalCookies.textContent = formatNumber(data.totalCookies || 0);
+    
+    if (lastActivity) {
+        if (data.lastActivity) {
+            lastActivity.textContent = formatTimeAgo(new Date(data.lastActivity));
+        } else {
+            lastActivity.textContent = 'Unknown';
+        }
+    }
+    
+    // Update last update time
+    const lastUpdate = document.getElementById('lastUpdate');
+    if (lastUpdate) {
+        lastUpdate.textContent = `Last updated: ${new Date().toLocaleTimeString()}`;
     }
 }
 
 // Update Leaderboard
-function updateLeaderboard(data) {
+function updateLeaderboard(leaderboard) {
     const leaderboardDiv = document.getElementById('leaderboard');
     
-    if (data.leaderboard && data.leaderboard.length > 0) {
-        leaderboardDiv.innerHTML = '';
-        
-        data.leaderboard.forEach((user, index) => {
-            const rankClass = index === 0 ? 'gold' : index === 1 ? 'silver' : index === 2 ? 'bronze' : '';
-            const medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : '';
-            
-            const item = document.createElement('div');
-            item.className = 'leaderboard-item';
-            item.innerHTML = `
-                <div style="display: flex; align-items: center; gap: 15px;">
-                    <span class="rank ${rankClass}">${medal || '#' + user.rank}</span>
-                    <span style="font-weight: bold;">${user.username}</span>
-                </div>
-                <span style="font-weight: bold; color: #667eea;">${user.points.toLocaleString()} pts</span>
-            `;
-            
-            leaderboardDiv.appendChild(item);
-        });
-    } else {
-        leaderboardDiv.innerHTML = '<p style="text-align: center; color: #999;">No users yet</p>';
-    }
-}
-
-// Update Recent Activity
-function updateRecentActivity(data) {
-    const activityDiv = document.getElementById('recentActivity');
+    if (!leaderboardDiv) return;
     
-    if (data.recentActivity && data.recentActivity.length > 0) {
-        activityDiv.innerHTML = '<div style="background: #f5f5f5; border-radius: 10px; padding: 15px;">';
-        
-        data.recentActivity.forEach(activity => {
-            const activityItem = document.createElement('div');
-            activityItem.style.cssText = 'padding: 10px; background: white; margin: 10px 0; border-radius: 8px; border-left: 3px solid #667eea;';
-            activityItem.textContent = '📌 ' + activity;
-            activityDiv.firstChild.appendChild(activityItem);
-        });
-    } else {
-        activityDiv.innerHTML = '<p style="text-align: center; color: #999;">No recent activity</p>';
-    }
-}
-
-// Main Update Function
-async function updateStatus() {
-    try {
-        const response = await fetch('/api/status');
-        
-        // Check if response is ok
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-        
-        const data = await response.json();
-        
-        // Hide loading, show content
-        document.getElementById('loading').style.display = 'none';
-        document.getElementById('content').style.display = 'block';
-        
-        // Check if we got valid data
-        if (data.error) {
-            // Show error state
-            updateFailedStatus();
-            showToast('Database connection failed', 'error');
-            return;
-        }
-        
-        // Update all sections
-        updateStatusDisplay(data);
-        updateStatistics(data);
-        updateLeaderboard(data);
-        updateRecentActivity(data);
-        
-        // Update timestamp
-        document.getElementById('lastUpdate').textContent = 'Last updated: ' + new Date().toLocaleTimeString();
-        
-    } catch (error) {
-        console.error('Error fetching status:', error);
-        
-        // Hide loading if it's still showing
-        document.getElementById('loading').style.display = 'none';
-        document.getElementById('content').style.display = 'block';
-        
-        // Update to failed status
-        updateFailedStatus();
-        showToast('Failed to connect to server', 'error');
-    }
-}
-
-// Update Failed Status Display
-function updateFailedStatus() {
-    const statusDot = document.getElementById('statusDot');
-    const statusText = document.getElementById('statusText');
-    const onlineStatus = document.getElementById('onlineStatus');
-    
-    statusDot.className = 'status-dot offline';
-    statusText.textContent = 'CONNECTION FAILED';
-    statusText.style.color = '#f44336';
-    onlineStatus.textContent = '⚠️';
-    
-    // Set all stats to error state
-    document.getElementById('totalUsers').textContent = 'N/A';
-    document.getElementById('activeUsers').textContent = 'N/A';
-    document.getElementById('totalServers').textContent = 'N/A';
-    document.getElementById('totalCookies').textContent = 'N/A';
-    document.getElementById('uptime').textContent = 'Unknown';
-    
-    // Show error in leaderboard
-    document.getElementById('leaderboard').innerHTML = '<p style="text-align: center; color: #f44336;">⚠️ Unable to load leaderboard</p>';
-    
-    // Show error in activity
-    document.getElementById('recentActivity').innerHTML = '<p style="text-align: center; color: #f44336;">⚠️ Unable to load activity</p>';
-    
-    // Update timestamp
-    document.getElementById('lastUpdate').textContent = 'Connection failed at: ' + new Date().toLocaleTimeString();
-}
-
-// Claim Daily Points Function
-async function claimDaily() {
-    const userIdInput = document.getElementById('discordId');
-    const usernameInput = document.getElementById('username');
-    const userId = userIdInput.value.trim();
-    const username = usernameInput.value.trim();
-    const button = document.getElementById('claimButton');
-    const resultDiv = document.getElementById('dailyResult');
-    
-    // Reset error states
-    userIdInput.classList.remove('error');
-    usernameInput.classList.remove('error');
-    
-    // Validation
-    let hasError = false;
-    
-    if (!userId) {
-        userIdInput.classList.add('error');
-        hasError = true;
-    } else if (!isValidDiscordId(userId)) {
-        userIdInput.classList.add('error');
-        showToast('Invalid Discord ID! Must be 17-20 digits.', 'error');
-        hasError = true;
-    }
-    
-    if (!username) {
-        usernameInput.classList.add('error');
-        hasError = true;
-    } else if (!isValidUsername(username)) {
-        usernameInput.classList.add('error');
-        showToast('Username must be 2-32 characters!', 'error');
-        hasError = true;
-    }
-    
-    if (hasError) {
-        resultDiv.innerHTML = '<div class="daily-result error">⚠️ Please fill in all fields correctly!</div>';
+    if (!leaderboard || leaderboard.length === 0) {
+        leaderboardDiv.innerHTML = `
+            <div class="leaderboard-loading">
+                <p>No leaderboard data available</p>
+            </div>
+        `;
         return;
     }
     
-    // Save for next time
-    saveUserInfo();
+    leaderboardDiv.innerHTML = '';
     
-    // Disable button and show loading
+    leaderboard.slice(0, 10).forEach((user, index) => {
+        const item = document.createElement('div');
+        item.className = 'leaderboard-item';
+        
+        const rankClass = index === 0 ? 'gold' : 
+                         index === 1 ? 'silver' : 
+                         index === 2 ? 'bronze' : '';
+        
+        const medal = index === 0 ? '🥇' : 
+                     index === 1 ? '🥈' : 
+                     index === 2 ? '🥉' : `#${index + 1}`;
+        
+        item.innerHTML = `
+            <div class="leaderboard-rank">
+                <span class="rank-number ${rankClass}">${medal}</span>
+                <span class="leaderboard-user">${escapeHtml(user.username || 'Unknown')}</span>
+            </div>
+            <span class="leaderboard-points">${formatNumber(user.points || 0)} pts</span>
+        `;
+        
+        leaderboardDiv.appendChild(item);
+    });
+}
+
+// Setup Event Listeners
+function setupEventListeners() {
+    // Form submission
+    const form = document.getElementById('dailyForm');
+    if (form) {
+        form.addEventListener('submit', handleDailyClaim);
+    }
+    
+    // Input validation
+    const discordIdInput = document.getElementById('discordId');
+    const usernameInput = document.getElementById('username');
+    
+    if (discordIdInput) {
+        discordIdInput.addEventListener('input', validateDiscordId);
+        discordIdInput.addEventListener('paste', handlePaste);
+    }
+    
+    if (usernameInput) {
+        usernameInput.addEventListener('input', validateUsername);
+    }
+}
+
+// Handle Paste Event
+function handlePaste(e) {
+    e.preventDefault();
+    const paste = (e.clipboardData || window.clipboardData).getData('text');
+    const cleaned = paste.replace(/[^0-9]/g, '');
+    e.target.value = cleaned.substring(0, 20);
+}
+
+// Validate Discord ID
+function validateDiscordId(e) {
+    const input = e.target;
+    const value = input.value;
+    const errorSpan = document.getElementById('idError');
+    
+    // Only allow numbers
+    input.value = value.replace(/[^0-9]/g, '');
+    
+    if (errorSpan) {
+        if (input.value && !isValidDiscordId(input.value)) {
+            input.classList.add('error');
+            errorSpan.textContent = 'Discord ID must be 17-20 digits';
+            errorSpan.classList.add('show');
+        } else {
+            input.classList.remove('error');
+            errorSpan.classList.remove('show');
+        }
+    }
+}
+
+// Validate Username
+function validateUsername(e) {
+    const input = e.target;
+    const errorSpan = document.getElementById('usernameError');
+    
+    if (errorSpan) {
+        if (input.value && !isValidUsername(input.value)) {
+            input.classList.add('error');
+            errorSpan.textContent = 'Username must be 2-32 characters';
+            errorSpan.classList.add('show');
+        } else {
+            input.classList.remove('error');
+            errorSpan.classList.remove('show');
+        }
+    }
+}
+
+// Handle Daily Claim
+async function handleDailyClaim(e) {
+    e.preventDefault();
+    
+    // Check rate limit
+    if (AppState.rateLimitActive) {
+        showToast('Please wait before trying again', 'warning');
+        return;
+    }
+    
+    // Check minimum interval
+    const now = Date.now();
+    if (now - AppState.lastClaimAttempt < Config.MIN_REQUEST_INTERVAL) {
+        showToast('Too fast! Please wait a moment', 'warning');
+        return;
+    }
+    
+    // Check bot status
+    if (!AppState.isOnline) {
+        showToast('Bot is offline. Please try again later', 'error');
+        return;
+    }
+    
+    // Get form data
+    const discordId = document.getElementById('discordId').value.trim();
+    const username = document.getElementById('username').value.trim();
+    const honeypot = document.getElementById('hpt').value;
+    
+    // Honeypot check
+    if (honeypot) {
+        console.warn('Bot detected');
+        return;
+    }
+    
+    // Validation
+    if (!isValidDiscordId(discordId)) {
+        showToast('Invalid Discord ID', 'error');
+        return;
+    }
+    
+    if (!isValidUsername(username)) {
+        showToast('Invalid username', 'error');
+        return;
+    }
+    
+    // Update UI
+    const button = document.getElementById('claimButton');
+    const originalText = button.textContent;
+    
     button.disabled = true;
-    button.textContent = '⏳ CLAIMING...';
-    resultDiv.innerHTML = '';
+    button.textContent = 'CLAIMING...';
+    
+    // Save data
+    saveUserData(discordId, username);
     
     try {
-        const response = await fetch('/api/daily', {
+        AppState.lastClaimAttempt = now;
+        AppState.attemptCount++;
+        
+        console.log('Claiming daily from:', Config.API_BASE + '/daily');
+        
+        const response = await fetch(`${Config.API_BASE}/daily`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({ userId, username })
+            body: JSON.stringify({
+                userId: discordId,
+                username: username,
+                timestamp: now
+            })
         });
         
         const data = await response.json();
         
         if (response.ok) {
-            // Success
-            button.classList.add('success');
-            button.textContent = '✅ CLAIMED!';
-            
-            resultDiv.innerHTML = `
-                <div class="daily-result success">
-                    <div>🎉 Success!</div>
-                    <div class="points-animation">+${data.points_earned} POINTS</div>
-                    <div>New Balance: ${data.new_balance} points</div>
-                    <div style="margin-top: 10px; font-size: 12px; opacity: 0.8;">
-                        💡 Use Discord bot for role bonuses!
-                    </div>
-                </div>
-            `;
-            
-            showToast('Daily points claimed successfully!', 'success');
-            
-            // Reset button after 3 seconds
-            setTimeout(() => {
-                button.classList.remove('success');
-                button.textContent = 'CLAIMED TODAY ✓';
-            }, 3000);
-            
+            handleClaimSuccess(data, button);
+            AppState.attemptCount = 0;
         } else {
-            // Error handling
-            if (data.error.includes('Already claimed') || data.error.includes('Daily already claimed')) {
-                button.textContent = '❌ ALREADY CLAIMED';
-                resultDiv.innerHTML = `
-                    <div class="daily-result error">
-                        <div>❌ ${data.error}</div>
-                        <div>⏰ Time left: ${data.timeLeft}</div>
-                        <div>Next claim: ${new Date(data.nextClaim).toLocaleString()}</div>
-                    </div>
-                `;
-                showToast('You already claimed today!', 'error');
-                
-            } else if (data.error.includes('offline')) {
-                button.textContent = '🔴 BOT OFFLINE';
-                resultDiv.innerHTML = `
-                    <div class="daily-result error">
-                        <div>🔴 Bot is offline!</div>
-                        <div>Please wait for the bot to come online.</div>
-                    </div>
-                `;
-                showToast('Bot is offline!', 'error');
-                button.disabled = false;
-                
-            } else if (data.error.includes('blacklisted')) {
-                button.textContent = '🚫 BLACKLISTED';
-                resultDiv.innerHTML = `
-                    <div class="daily-result error">
-                        <div>🚫 ${data.error}</div>
-                    </div>
-                `;
-                showToast('You are blacklisted!', 'error');
-                
-            } else {
-                button.textContent = '❌ ERROR';
-                resultDiv.innerHTML = `
-                    <div class="daily-result error">
-                        <div>❌ ${data.error}</div>
-                    </div>
-                `;
-                showToast(data.error, 'error');
-                button.disabled = false;
-            }
+            handleClaimError(data, button);
         }
         
     } catch (error) {
-        console.error('Error:', error);
-        button.textContent = 'TRY AGAIN';
+        console.error('Claim error:', error);
+        showToast('Connection error. Please try again', 'error');
+        showResult('error', 'Connection failed', 'Please check your internet connection');
+        button.textContent = originalText;
+    } finally {
         button.disabled = false;
-        resultDiv.innerHTML = `
-            <div class="daily-result error">
-                ❌ Connection error! Please try again.
-            </div>
-        `;
-        showToast('Connection error!', 'error');
     }
 }
 
-// Event Listeners
-window.addEventListener('DOMContentLoaded', () => {
-    loadUserInfo();
-    updateStatus();
+// Handle Claim Success
+function handleClaimSuccess(data, button) {
+    button.classList.add('success');
+    button.textContent = '✅ CLAIMED!';
     
-    // Add enter key support
-    document.getElementById('discordId').addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') claimDaily();
-    });
+    showToast(`Claimed ${data.points_earned} points!`, 'success');
     
-    document.getElementById('username').addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') claimDaily();
-    });
+    showResult('success', 
+        `🎉 Success!`,
+        `+${data.points_earned} POINTS`,
+        `New Balance: ${formatNumber(data.new_balance)} points`,
+        'Use Discord bot for role bonuses up to 20 points!'
+    );
     
-    // Add retry button functionality
-    document.addEventListener('click', (e) => {
-        if (e.target.id === 'retryButton') {
-            updateStatus();
+    // Reset button after delay
+    setTimeout(() => {
+        button.classList.remove('success');
+        button.textContent = 'CLAIMED TODAY ✓';
+    }, 3000);
+    
+    // Refresh status
+    setTimeout(updateBotStatus, 2000);
+}
+
+// Handle Claim Error
+function handleClaimError(data, button) {
+    button.classList.add('error');
+    button.textContent = '❌ ERROR';
+    
+    setTimeout(() => {
+        button.classList.remove('error');
+        button.textContent = 'CLAIM DAILY POINTS';
+    }, 3000);
+    
+    if (data.error.includes('already claimed') || data.error.includes('Daily already claimed')) {
+        showToast('Already claimed today!', 'error');
+        showResult('error', 
+            '❌ Already Claimed',
+            data.error,
+            data.timeLeft ? `Time left: ${data.timeLeft}` : '',
+            data.nextClaim ? `Next claim: ${new Date(data.nextClaim).toLocaleString()}` : ''
+        );
+    } else if (data.error.includes('blacklisted')) {
+        showToast('You are blacklisted', 'error');
+        showResult('error', '🚫 Blacklisted', data.error);
+    } else if (data.error.includes('offline')) {
+        showToast('Bot is offline', 'error');
+        showResult('error', '🔴 Bot Offline', 'Please wait for the bot to come online');
+    } else {
+        showToast(data.error || 'Claim failed', 'error');
+        showResult('error', '❌ Error', data.error || 'Unknown error occurred');
+    }
+}
+
+// Show Result
+function showResult(type, title, ...messages) {
+    const resultDiv = document.getElementById('dailyResult');
+    
+    if (!resultDiv) return;
+    
+    const resultCard = document.createElement('div');
+    resultCard.className = `result-card ${type}`;
+    
+    let html = `<div class="result-title">${title}</div>`;
+    
+    messages.forEach(msg => {
+        if (msg) {
+            if (msg.startsWith('+') && msg.includes('POINTS')) {
+                html += `<div class="result-points">${msg}</div>`;
+            } else {
+                html += `<div class="result-message">${msg}</div>`;
+            }
         }
     });
-});
+    
+    resultCard.innerHTML = html;
+    resultDiv.innerHTML = '';
+    resultDiv.appendChild(resultCard);
+}
 
-// Auto-update every 30 seconds
-setInterval(updateStatus, 30000);
+// Show Toast Notification
+function showToast(message, type = 'info') {
+    const container = document.getElementById('toastContainer');
+    
+    if (!container) return;
+    
+    const toast = document.createElement('div');
+    toast.className = `toast ${type}`;
+    
+    const icon = type === 'success' ? '✅' : 
+                type === 'error' ? '❌' : 
+                type === 'warning' ? '⚠️' : 'ℹ️';
+    
+    toast.innerHTML = `<span>${icon}</span><span>${message}</span>`;
+    container.appendChild(toast);
+    
+    setTimeout(() => {
+        toast.style.opacity = '0';
+        setTimeout(() => toast.remove(), 300);
+    }, 5000);
+}
 
-// Export functions for global access
-window.claimDaily = claimDaily;
-window.updateStatus = updateStatus;
+// Format Number
+function formatNumber(num) {
+    return new Intl.NumberFormat().format(num);
+}
+
+// Format Time Ago
+function formatTimeAgo(date) {
+    const seconds = Math.floor((new Date() - date) / 1000);
+    
+    if (seconds < 60) return 'Just now';
+    if (seconds < 3600) return Math.floor(seconds / 60) + 'm ago';
+    if (seconds < 86400) return Math.floor(seconds / 3600) + 'h ago';
+    if (seconds < 604800) return Math.floor(seconds / 86400) + 'd ago';
+    return date.toLocaleDateString();
+}
+
+// Escape HTML
+function escapeHtml(text) {
+    const map = {
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#039;'
+    };
+    return text.replace(/[&<>"']/g, m => map[m]);
+}
+
+// Start Auto Update
+function startAutoUpdate() {
+    setInterval(updateBotStatus, Config.UPDATE_INTERVAL);
+}
