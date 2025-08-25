@@ -9,9 +9,9 @@ const AppState = {
     attemptCount: 0
 };
 
-// Configuration - Update this with your actual API endpoint
+// Configuration
 const Config = {
-    API_BASE: '', // Will be set based on environment
+    API_BASE: '', 
     UPDATE_INTERVAL: 30000,
     MAX_ATTEMPTS: 3,
     RATE_LIMIT_WINDOW: 60000,
@@ -22,7 +22,6 @@ const Config = {
 if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
     Config.API_BASE = 'http://localhost:3000/api';
 } else {
-    // Update this with your Vercel app URL
     Config.API_BASE = window.location.origin + '/api';
 }
 
@@ -35,11 +34,11 @@ document.addEventListener('DOMContentLoaded', function() {
 // Application Initialization
 async function initializeApp() {
     try {
-        // Hide honeypot field
-        const honeypot = document.getElementById('hpt');
-        if (honeypot) {
-            honeypot.style.display = 'none';
-        }
+        // Hide honeypot fields
+        const hp_name = document.getElementById('hp_name');
+        const hp_email = document.getElementById('hp_email');
+        if (hp_name) hp_name.style.display = 'none';
+        if (hp_email) hp_email.style.display = 'none';
 
         // Load saved data
         loadSavedData();
@@ -53,32 +52,33 @@ async function initializeApp() {
         // Start auto update
         startAutoUpdate();
         
-        // Show content
+        // Show main content and hide loading screen
         showContent();
         
     } catch (error) {
         console.error('Initialization error:', error);
+        showContent(); // Show content even on error
         showOfflineStatus();
     }
 }
 
 // Show content after loading
 function showContent() {
-    const loading = document.querySelector('.loading');
-    const content = document.getElementById('content');
-    
-    if (loading) {
-        loading.style.display = 'none';
+    // Hide loading screen
+    const loadingScreen = document.getElementById('loadingScreen');
+    if (loadingScreen) {
+        loadingScreen.style.display = 'none';
     }
     
-    if (content) {
-        content.style.display = 'block';
+    // Show main container
+    const mainContainer = document.getElementById('mainContainer');
+    if (mainContainer) {
+        mainContainer.style.display = 'block';
     }
 }
 
 // Show offline status
 function showOfflineStatus() {
-    showContent();
     updateStatusDisplay({ 
         online: false,
         totalUsers: 0,
@@ -95,12 +95,16 @@ function loadSavedData() {
         const savedId = localStorage.getItem('discordId');
         const savedUsername = localStorage.getItem('username');
         
-        if (savedId && isValidDiscordId(savedId)) {
-            document.getElementById('discordId').value = savedId;
+        // Fixed: Changed from 'discordId' to 'userId'
+        const userIdInput = document.getElementById('userId');
+        const usernameInput = document.getElementById('username');
+        
+        if (savedId && isValidDiscordId(savedId) && userIdInput) {
+            userIdInput.value = savedId;
         }
         
-        if (savedUsername && isValidUsername(savedUsername)) {
-            document.getElementById('username').value = savedUsername;
+        if (savedUsername && isValidUsername(savedUsername) && usernameInput) {
+            usernameInput.value = savedUsername;
         }
     } catch (e) {
         console.error('Failed to load saved data:', e);
@@ -176,23 +180,11 @@ function updateStatusDisplay(data) {
         }
     }
     
-    // Update stats
-    const totalUsers = document.getElementById('totalUsers');
-    const totalServers = document.getElementById('totalServers');
-    const totalCookies = document.getElementById('totalCookies');
-    const lastActivity = document.getElementById('lastActivity');
-    
-    if (totalUsers) totalUsers.textContent = formatNumber(data.totalUsers || 0);
-    if (totalServers) totalServers.textContent = formatNumber(data.totalServers || 0);
-    if (totalCookies) totalCookies.textContent = formatNumber(data.totalCookies || 0);
-    
-    if (lastActivity) {
-        if (data.lastActivity) {
-            lastActivity.textContent = formatTimeAgo(new Date(data.lastActivity));
-        } else {
-            lastActivity.textContent = 'Unknown';
-        }
-    }
+    // Update stats - Fixed: Added activeToday
+    document.getElementById('totalUsers')?.textContent = formatNumber(data.totalUsers || 0);
+    document.getElementById('totalPoints')?.textContent = formatNumber(data.totalPoints || 0);
+    document.getElementById('totalCookies')?.textContent = formatNumber(data.totalCookies || 0);
+    document.getElementById('activeToday')?.textContent = formatNumber(data.activeToday || 0);
     
     // Update last update time
     const lastUpdate = document.getElementById('lastUpdate');
@@ -232,7 +224,7 @@ function updateLeaderboard(leaderboard) {
         
         item.innerHTML = `
             <div class="leaderboard-rank">
-                <span class="rank-number ${rankClass}">${medal}</span>
+                <span class="rank-badge ${rankClass}">${medal}</span>
                 <span class="leaderboard-user">${escapeHtml(user.username || 'Unknown')}</span>
             </div>
             <span class="leaderboard-points">${formatNumber(user.points || 0)} pts</span>
@@ -244,23 +236,29 @@ function updateLeaderboard(leaderboard) {
 
 // Setup Event Listeners
 function setupEventListeners() {
-    // Form submission
-    const form = document.getElementById('dailyForm');
+    // Fixed: Changed from 'dailyForm' to 'claimForm'
+    const form = document.getElementById('claimForm');
     if (form) {
         form.addEventListener('submit', handleDailyClaim);
     }
     
-    // Input validation
-    const discordIdInput = document.getElementById('discordId');
+    // Fixed: Changed from 'discordId' to 'userId'
+    const userIdInput = document.getElementById('userId');
     const usernameInput = document.getElementById('username');
     
-    if (discordIdInput) {
-        discordIdInput.addEventListener('input', validateDiscordId);
-        discordIdInput.addEventListener('paste', handlePaste);
+    if (userIdInput) {
+        userIdInput.addEventListener('input', validateDiscordId);
+        userIdInput.addEventListener('paste', handlePaste);
     }
     
     if (usernameInput) {
         usernameInput.addEventListener('input', validateUsername);
+    }
+    
+    // Set form timestamp for anti-bot
+    const formTimestamp = document.getElementById('formTimestamp');
+    if (formTimestamp) {
+        formTimestamp.value = Date.now();
     }
 }
 
@@ -276,37 +274,25 @@ function handlePaste(e) {
 function validateDiscordId(e) {
     const input = e.target;
     const value = input.value;
-    const errorSpan = document.getElementById('idError');
     
     // Only allow numbers
     input.value = value.replace(/[^0-9]/g, '');
     
-    if (errorSpan) {
-        if (input.value && !isValidDiscordId(input.value)) {
-            input.classList.add('error');
-            errorSpan.textContent = 'Discord ID must be 17-20 digits';
-            errorSpan.classList.add('show');
-        } else {
-            input.classList.remove('error');
-            errorSpan.classList.remove('show');
-        }
+    if (input.value && !isValidDiscordId(input.value)) {
+        input.classList.add('error');
+    } else {
+        input.classList.remove('error');
     }
 }
 
 // Validate Username
 function validateUsername(e) {
     const input = e.target;
-    const errorSpan = document.getElementById('usernameError');
     
-    if (errorSpan) {
-        if (input.value && !isValidUsername(input.value)) {
-            input.classList.add('error');
-            errorSpan.textContent = 'Username must be 2-32 characters';
-            errorSpan.classList.add('show');
-        } else {
-            input.classList.remove('error');
-            errorSpan.classList.remove('show');
-        }
+    if (input.value && !isValidUsername(input.value)) {
+        input.classList.add('error');
+    } else {
+        input.classList.remove('error');
     }
 }
 
@@ -333,19 +319,20 @@ async function handleDailyClaim(e) {
         return;
     }
     
-    // Get form data
-    const discordId = document.getElementById('discordId').value.trim();
+    // Get form data - Fixed IDs
+    const userId = document.getElementById('userId').value.trim();
     const username = document.getElementById('username').value.trim();
-    const honeypot = document.getElementById('hpt').value;
+    const hp_name = document.getElementById('hp_name')?.value || '';
+    const hp_email = document.getElementById('hp_email')?.value || '';
     
     // Honeypot check
-    if (honeypot) {
+    if (hp_name || hp_email) {
         console.warn('Bot detected');
         return;
     }
     
     // Validation
-    if (!isValidDiscordId(discordId)) {
+    if (!isValidDiscordId(userId)) {
         showToast('Invalid Discord ID', 'error');
         return;
     }
@@ -357,13 +344,20 @@ async function handleDailyClaim(e) {
     
     // Update UI
     const button = document.getElementById('claimButton');
-    const originalText = button.textContent;
+    const buttonText = button.querySelector('.button-text');
+    const buttonLoader = button.querySelector('.button-loader');
     
     button.disabled = true;
-    button.textContent = 'CLAIMING...';
+    buttonText.textContent = 'CLAIMING...';
+    if (buttonLoader) {
+        buttonLoader.style.display = 'flex';
+    }
     
     // Save data
-    saveUserData(discordId, username);
+    saveUserData(userId, username);
+    
+    // Generate session token
+    const sessionToken = btoa(userId + ':' + Date.now() + ':' + Math.random());
     
     try {
         AppState.lastClaimAttempt = now;
@@ -377,8 +371,9 @@ async function handleDailyClaim(e) {
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({
-                userId: discordId,
+                userId: userId,
                 username: username,
+                sessionToken: sessionToken,
                 timestamp: now
             })
         });
@@ -386,26 +381,28 @@ async function handleDailyClaim(e) {
         const data = await response.json();
         
         if (response.ok) {
-            handleClaimSuccess(data, button);
+            handleClaimSuccess(data, button, buttonText, buttonLoader);
             AppState.attemptCount = 0;
         } else {
-            handleClaimError(data, button);
+            handleClaimError(data, button, buttonText, buttonLoader);
         }
         
     } catch (error) {
         console.error('Claim error:', error);
         showToast('Connection error. Please try again', 'error');
         showResult('error', 'Connection failed', 'Please check your internet connection');
-        button.textContent = originalText;
+        buttonText.textContent = 'CLAIM DAILY POINTS';
+        if (buttonLoader) buttonLoader.style.display = 'none';
     } finally {
         button.disabled = false;
     }
 }
 
 // Handle Claim Success
-function handleClaimSuccess(data, button) {
+function handleClaimSuccess(data, button, buttonText, buttonLoader) {
     button.classList.add('success');
-    button.textContent = '✅ CLAIMED!';
+    buttonText.textContent = '✅ CLAIMED!';
+    if (buttonLoader) buttonLoader.style.display = 'none';
     
     showToast(`Claimed ${data.points_earned} points!`, 'success');
     
@@ -419,7 +416,7 @@ function handleClaimSuccess(data, button) {
     // Reset button after delay
     setTimeout(() => {
         button.classList.remove('success');
-        button.textContent = 'CLAIMED TODAY ✓';
+        buttonText.textContent = 'CLAIMED TODAY ✓';
     }, 3000);
     
     // Refresh status
@@ -427,13 +424,14 @@ function handleClaimSuccess(data, button) {
 }
 
 // Handle Claim Error
-function handleClaimError(data, button) {
+function handleClaimError(data, button, buttonText, buttonLoader) {
     button.classList.add('error');
-    button.textContent = '❌ ERROR';
+    buttonText.textContent = '❌ ERROR';
+    if (buttonLoader) buttonLoader.style.display = 'none';
     
     setTimeout(() => {
         button.classList.remove('error');
-        button.textContent = 'CLAIM DAILY POINTS';
+        buttonText.textContent = 'CLAIM DAILY POINTS';
     }, 3000);
     
     if (data.error.includes('already claimed') || data.error.includes('Daily already claimed')) {
@@ -458,12 +456,12 @@ function handleClaimError(data, button) {
 
 // Show Result
 function showResult(type, title, ...messages) {
-    const resultDiv = document.getElementById('dailyResult');
+    // Fixed: Changed from 'dailyResult' to 'claimResult'
+    const resultDiv = document.getElementById('claimResult');
     
     if (!resultDiv) return;
     
-    const resultCard = document.createElement('div');
-    resultCard.className = `result-card ${type}`;
+    resultDiv.className = `claim-result ${type}`;
     
     let html = `<div class="result-title">${title}</div>`;
     
@@ -477,9 +475,8 @@ function showResult(type, title, ...messages) {
         }
     });
     
-    resultCard.innerHTML = html;
-    resultDiv.innerHTML = '';
-    resultDiv.appendChild(resultCard);
+    resultDiv.innerHTML = html;
+    resultDiv.style.display = 'block';
 }
 
 // Show Toast Notification
