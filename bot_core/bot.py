@@ -120,6 +120,7 @@ class CookieBot(commands.Bot):
         self.cleanup_cache.start()
         self.monitor_performance.start()
         self.cleanup_active_claims.start()
+        self.update_website_status.start()
         self._connection_check_task = asyncio.create_task(self._monitor_db_connection())
         
         print("✅ Ready!")
@@ -231,6 +232,21 @@ class CookieBot(commands.Bot):
         except Exception as e:
             logger.error(f"Error cleaning up active claims: {e}")
     
+    @tasks.loop(minutes=1)
+    async def update_website_status(self):
+        """Update status for website"""
+        try:
+            await self.db.config.update_one(
+                {"_id": "bot_config"},
+                {"$set": {"last_activity": datetime.now(timezone.utc)}}
+            )
+        except:
+            pass
+
+    @update_website_status.before_loop
+    async def before_update_website_status(self):
+        await self.wait_until_ready()
+
     @tasks.loop(minutes=10)
     async def monitor_performance(self):
         try:
