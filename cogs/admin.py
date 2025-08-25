@@ -1,6 +1,6 @@
 # cogs/admin.py
 # Location: cogs/admin.py
-# Description: Updated admin module with enhanced role management and new DB structure
+# Description: Updated admin module with enhanced role management and viewing commands
 
 import discord
 from discord.ext import commands
@@ -8,6 +8,29 @@ from discord import app_commands
 from datetime import datetime, timedelta, timezone
 import traceback
 from typing import Optional
+
+class RolePaginationView(discord.ui.View):
+    def __init__(self, embeds):
+        super().__init__(timeout=120)
+        self.embeds = embeds
+        self.current = 0
+        self.update_buttons()
+    
+    def update_buttons(self):
+        self.previous.disabled = self.current == 0
+        self.next.disabled = self.current >= len(self.embeds) - 1
+    
+    @discord.ui.button(emoji="⬅️", style=discord.ButtonStyle.blurple)
+    async def previous(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.current = max(0, self.current - 1)
+        self.update_buttons()
+        await interaction.response.edit_message(embed=self.embeds[self.current], view=self)
+    
+    @discord.ui.button(emoji="➡️", style=discord.ButtonStyle.blurple)
+    async def next(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.current = min(len(self.embeds) - 1, self.current + 1)
+        self.update_buttons()
+        await interaction.response.edit_message(embed=self.embeds[self.current], view=self)
 
 class AdminCog(commands.Cog):
     def __init__(self, bot):
@@ -84,6 +107,292 @@ class AdminCog(commands.Cog):
             }
             await self.db.users.insert_one(user)
         return user
+
+    @commands.hybrid_command(name="roles", description="View all role configurations and benefits")
+    async def roles(self, ctx):
+        try:
+            if hasattr(ctx, 'interaction') and ctx.interaction:
+                await ctx.interaction.response.defer(ephemeral=True)
+            
+            server = await self.db.servers.find_one({"server_id": ctx.guild.id})
+            
+            if not server:
+                await ctx.send("❌ Server not configured!", ephemeral=True)
+                return
+            
+            if not server.get("role_based"):
+                embed = discord.Embed(
+                    title="❌ Role System Disabled",
+                    description="Role-based benefits are not enabled in this server!\nUse `/setup` to enable.",
+                    color=discord.Color.red()
+                )
+                await ctx.send(embed=embed, ephemeral=True)
+                return
+            
+            if not server.get("roles"):
+                embed = discord.Embed(
+                    title="❌ No Roles Configured",
+                    description="No roles have been configured yet!\nUse `/setrole` to configure roles.",
+                    color=discord.Color.orange()
+                )
+                await ctx.send(embed=embed, ephemeral=True)
+                return
+            
+            # Create paginated embeds for all roles
+            embeds = []
+            
+            # Overview embed
+            overview_embed = discord.Embed(
+                title="🎭 Role Configuration Overview",
+                description=f"**Total Configured Roles:** {len(server['roles'])}\n**Role System:** ✅ Enabled",
+                color=discord.Color.blue(),
+                timestamp=datetime.now(timezone.utc)
+            )
+            
+            # Quick summary
+            role_summary = []
+            for role_id, role_config in server["roles"].items():
+                if isinstance(role_config, dict):
+                    role = ctx.guild.get_role(int(role_id))
+                    role_name = role_config.get("name", "Unknown")
+                    daily_bonus = role_config.get("daily_bonus", 0)
+                    emoji = role_config.get("emoji", "🎭")
+                    role_summary.append(f"{emoji} **{role_name}**: +{daily_bonus} daily")
+            
+            if role_summary:
+                overview_embed.add_field(
+                    name="📊 Quick Summary",
+                    value="\n".join(role_summary[:10]),
+                    inline=False
+                )
+            
+            embeds.append(overview_embed)
+            
+            # Detailed role pages
+            for role_id, role_config in server["roles"].items():
+                if not isinstance(role_config, dict):
+                    continue
+                
+                role = ctx.guild.get_role(int(role_id))
+                role_name = role_config.get("name", "Unknown")
+                
+                role_embed = discord.Embed(
+                    title=f"{role_config.get('emoji', '🎭')} {role_name.title()} Role Benefits",
+                    description=role_config.get("description", "Premium role with special benefits"),
+                    color=role.color if role else discord.Color.blue()
+                )
+                
+                # Basic benefits
+                role_embed.add_field(
+                    name="💰 Points Benefits",
+                    value=f"**Daily Bonus:** +{role_config.get('daily_bonus', 0)} points\n"
+                          f"**Invite Bonus:** +{role_config.get('invite_bonus', 0)} per invite\n"
+                          f"**Trust Multiplier:** ×{role_config.get('trust_multiplier', 1.0)}",
+                    inline=True
+                )
+                
+                # Game benefits
+                game_benefits = role_config.get("game_benefits", {})
+                if game_benefits:
+                    game_text = []
+                    if game_benefits.get("slots_max_bet_bonus", 0) > 0:
+                        game_text.append(f"**Slots Max Bet:** +{game_benefits['slots_max_bet_bonus']}")
+                    if game_benefits.get("rob_success_bonus", 0) > 0:
+                        game_text.append(f"**Rob Success:** +{game_benefits['rob_success_bonus']}%")
+                    if game_benefits.get("bet_profit_multiplier", 1.0) > 1.0:
+                        game_text.append(f"**Bet Profits:** ×{game_benefits['bet_profit_multiplier']}")
+                    
+                    if game_text:
+                        role_embed.add_field(
+                            name="🎮 Game Benefits",
+                            value="\n".join(game_text),
+                            inline=True
+                        )
+                
+                # Cookie access
+                cookie_access = role_config.get("cookie_access", {})
+                if cookie_access:
+                    accessible = []
+                    restricted = []
+                    
+                    for cookie_type, access in cookie_access.items():
+                        if access.get("enabled", False):
+                            cost = access.get("cost", "default")
+                            cooldown = access.get("cooldown", "default")
+                            daily_limit = access.get("daily_limit", -1)
+                            
+                            access_text = f"**{cookie_type}**\n"
+                            access_text += f"├ Cost: {cost} pts\n"
+                            access_text += f"├ CD: {cooldown}h\n"
+                            access_text += f"└ Limit: {daily_limit if daily_limit != -1 else '∞'}/day"
+                            accessible.append(access_text)
+                        else:
+                            restricted.append(cookie_type)
+                    
+                    if accessible:
+                        # Split into columns if many cookies
+                        if len(accessible) <= 3:
+                            role_embed.add_field(
+                                name="🍪 Cookie Access",
+                                value="\n\n".join(accessible),
+                                inline=False
+                            )
+                        else:
+                            # First half
+                            role_embed.add_field(
+                                name="🍪 Cookie Access (1/2)",
+                                value="\n\n".join(accessible[:len(accessible)//2]),
+                                inline=True
+                            )
+                            # Second half
+                            role_embed.add_field(
+                                name="🍪 Cookie Access (2/2)",
+                                value="\n\n".join(accessible[len(accessible)//2:]),
+                                inline=True
+                            )
+                    
+                    if restricted:
+                        role_embed.add_field(
+                            name="🚫 Restricted Cookies",
+                            value=", ".join(restricted),
+                            inline=False
+                        )
+                
+                # Members with this role
+                if role:
+                    member_count = len(role.members)
+                    role_embed.add_field(
+                        name="👥 Members",
+                        value=f"**{member_count}** users have this role",
+                        inline=True
+                    )
+                    
+                    # Show Discord role info
+                    role_embed.add_field(
+                        name="📌 Discord Role",
+                        value=f"{role.mention}\nPosition: {role.position}",
+                        inline=True
+                    )
+                
+                role_embed.set_footer(text=f"Role ID: {role_id}")
+                embeds.append(role_embed)
+            
+            # Send embeds with pagination
+            if len(embeds) == 1:
+                await ctx.send(embed=embeds[0], ephemeral=True)
+            else:
+                # Create paginated view
+                view = RolePaginationView(embeds)
+                await ctx.send(embed=embeds[0], view=view, ephemeral=True)
+                
+        except Exception as e:
+            print(f"Error in roles command: {e}")
+            await ctx.send("❌ An error occurred!", ephemeral=True)
+
+    @commands.hybrid_command(name="roleinfo", description="Get detailed info about a specific role")
+    @app_commands.describe(role="The role to get information about")
+    async def roleinfo(self, ctx, role: discord.Role):
+        try:
+            if hasattr(ctx, 'interaction') and ctx.interaction:
+                await ctx.interaction.response.defer(ephemeral=True)
+            
+            server = await self.db.servers.find_one({"server_id": ctx.guild.id})
+            
+            if not server or not server.get("role_based"):
+                await ctx.send("❌ Role system not enabled!", ephemeral=True)
+                return
+            
+            role_config = server.get("roles", {}).get(str(role.id))
+            
+            if not role_config or not isinstance(role_config, dict):
+                embed = discord.Embed(
+                    title="❌ Role Not Configured",
+                    description=f"{role.mention} has no cookie benefits configured!",
+                    color=discord.Color.red()
+                )
+                embed.add_field(
+                    name="💡 How to configure",
+                    value="An admin can use `/setrole` to set up this role",
+                    inline=False
+                )
+                await ctx.send(embed=embed, ephemeral=True)
+                return
+            
+            # Create detailed embed
+            embed = discord.Embed(
+                title=f"{role_config.get('emoji', '🎭')} {role.name} - Detailed Benefits",
+                description=role_config.get("description", "Role with special cookie benefits"),
+                color=role.color
+            )
+            
+            # Calculate total value
+            daily_value = role_config.get("daily_bonus", 0)
+            yearly_value = daily_value * 365
+            
+            embed.add_field(
+                name="💵 Economic Value",
+                value=f"**Daily:** {daily_value} points\n"
+                      f"**Monthly:** {daily_value * 30} points\n"
+                      f"**Yearly:** {yearly_value:,} points",
+                inline=True
+            )
+            
+            # Members
+            embed.add_field(
+                name="👥 Current Members",
+                value=f"**{len(role.members)}** users\n"
+                      f"Position: #{role.position}",
+                inline=True
+            )
+            
+            # All benefits in one place
+            benefits_text = []
+            if role_config.get("daily_bonus", 0) > 0:
+                benefits_text.append(f"✅ +{role_config['daily_bonus']} daily points")
+            if role_config.get("trust_multiplier", 1.0) > 1.0:
+                benefits_text.append(f"✅ ×{role_config['trust_multiplier']} trust gain")
+            if role_config.get("invite_bonus", 0) > 0:
+                benefits_text.append(f"✅ +{role_config['invite_bonus']} per invite")
+            
+            if benefits_text:
+                embed.add_field(
+                    name="✨ All Benefits",
+                    value="\n".join(benefits_text),
+                    inline=False
+                )
+            
+            # Cookie comparison
+            cookie_access = role_config.get("cookie_access", {})
+            if cookie_access:
+                comparison = []
+                config = await self.db.config.find_one({"_id": "bot_config"})
+                default_cookies = config.get("default_cookies", {})
+                
+                for cookie_type, access in cookie_access.items():
+                    if access.get("enabled", False):
+                        default_cost = default_cookies.get(cookie_type, {}).get("cost", 5)
+                        role_cost = access.get("cost", default_cost)
+                        savings = default_cost - role_cost
+                        
+                        if savings > 0:
+                            comparison.append(f"**{cookie_type}**: -{savings} pts (save {savings/default_cost*100:.0f}%)")
+                        else:
+                            comparison.append(f"**{cookie_type}**: {role_cost} pts")
+                
+                if comparison:
+                    embed.add_field(
+                        name="💰 Cookie Savings",
+                        value="\n".join(comparison[:5]),
+                        inline=False
+                    )
+            
+            embed.set_footer(text=f"Get this role to unlock these benefits!")
+            
+            await ctx.send(embed=embed, ephemeral=True)
+            
+        except Exception as e:
+            print(f"Error in roleinfo command: {e}")
+            await ctx.send("❌ An error occurred!", ephemeral=True)
 
     @commands.hybrid_command(name="givepoints", description="Give or remove points from a user")
     @app_commands.describe(
@@ -455,7 +764,7 @@ class AdminCog(commands.Cog):
             
             await ctx.send(embed=embed)
             
-            # Remove blacklist role if exists
+            # Remove blacklist role if exists - FIXED: Define server variable first
             server = await self.db.servers.find_one({"server_id": ctx.guild.id})
             if server and server.get("roles"):
                 for role_id, role_config in server["roles"].items():
