@@ -1,17 +1,4 @@
-// script.js - Cookie Bot Status JavaScript
-
-// Cookie type configurations
-const COOKIE_TYPES = {
-    netflix: { emoji: '🎬', color: '#E50914' },
-    spotify: { emoji: '🎵', color: '#1DB954' },
-    prime: { emoji: '📦', color: '#FF9900' },
-    jiohotstar: { emoji: '🌟', color: '#1E3A8A' },
-    tradingview: { emoji: '📈', color: '#2962FF' },
-    chatgpt: { emoji: '🤖', color: '#10A37F' },
-    claude: { emoji: '🧠', color: '#8B5CF6' },
-    peacock: { emoji: '🦚', color: '#000000' },
-    crunchyroll: { emoji: '🍜', color: '#F47521' }
-};
+// script.js - Cookie Bot Status JavaScript (Updated)
 
 // Utility Functions
 function isValidDiscordId(id) {
@@ -83,6 +70,11 @@ function updateStatusDisplay(data) {
         statusText.textContent = 'OFFLINE';
         statusText.style.color = '#f44336';
         onlineStatus.textContent = '🔴';
+        
+        // Show offline toast if status changed
+        if (window.lastOnlineStatus === true) {
+            showToast('Bot went offline', 'warning');
+        }
     }
     
     window.lastOnlineStatus = data.online;
@@ -99,43 +91,6 @@ function updateStatistics(data) {
         const lastSeen = new Date(data.lastSeen);
         document.getElementById('uptime').textContent = formatTimeAgo(lastSeen);
     }
-}
-
-// Update Cookie Stock
-function updateCookieStock(data) {
-    const stockDiv = document.getElementById('cookieStock');
-    stockDiv.innerHTML = '';
-    
-    const cookies = data.cookieStock || {};
-    
-    // Show all cookie types, even if not in data
-    Object.keys(COOKIE_TYPES).forEach(cookieType => {
-        const count = cookies[cookieType] || 0;
-        const info = COOKIE_TYPES[cookieType];
-        const percent = Math.min((count / 50) * 100, 100);
-        
-        const stockItem = document.createElement('div');
-        stockItem.className = 'cookie-item';
-        stockItem.style.borderLeftColor = info.color;
-        
-        stockItem.innerHTML = `
-            <span>${info.emoji} <strong>${cookieType.toUpperCase()}</strong></span>
-            <div style="display: flex; align-items: center; gap: 15px;">
-                <span style="font-weight: bold; color: ${count > 10 ? '#4caf50' : count > 5 ? '#ff9800' : '#f44336'}">
-                    ${count} files
-                </span>
-                <div class="stock-bar">
-                    <div class="stock-fill" style="width: ${percent}%; background: ${
-                        count > 10 ? 'linear-gradient(90deg, #4caf50, #8bc34a)' :
-                        count > 5 ? 'linear-gradient(90deg, #ff9800, #ffc107)' :
-                        'linear-gradient(90deg, #f44336, #e91e63)'
-                    }"></div>
-                </div>
-            </div>
-        `;
-        
-        stockDiv.appendChild(stockItem);
-    });
 }
 
 // Update Leaderboard
@@ -188,16 +143,29 @@ function updateRecentActivity(data) {
 async function updateStatus() {
     try {
         const response = await fetch('/api/status');
+        
+        // Check if response is ok
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        
         const data = await response.json();
         
         // Hide loading, show content
         document.getElementById('loading').style.display = 'none';
         document.getElementById('content').style.display = 'block';
         
+        // Check if we got valid data
+        if (data.error) {
+            // Show error state
+            updateFailedStatus();
+            showToast('Database connection failed', 'error');
+            return;
+        }
+        
         // Update all sections
         updateStatusDisplay(data);
         updateStatistics(data);
-        updateCookieStock(data);
         updateLeaderboard(data);
         updateRecentActivity(data);
         
@@ -206,8 +174,43 @@ async function updateStatus() {
         
     } catch (error) {
         console.error('Error fetching status:', error);
-        showToast('Failed to update status', 'error');
+        
+        // Hide loading if it's still showing
+        document.getElementById('loading').style.display = 'none';
+        document.getElementById('content').style.display = 'block';
+        
+        // Update to failed status
+        updateFailedStatus();
+        showToast('Failed to connect to server', 'error');
     }
+}
+
+// Update Failed Status Display
+function updateFailedStatus() {
+    const statusDot = document.getElementById('statusDot');
+    const statusText = document.getElementById('statusText');
+    const onlineStatus = document.getElementById('onlineStatus');
+    
+    statusDot.className = 'status-dot offline';
+    statusText.textContent = 'CONNECTION FAILED';
+    statusText.style.color = '#f44336';
+    onlineStatus.textContent = '⚠️';
+    
+    // Set all stats to error state
+    document.getElementById('totalUsers').textContent = 'N/A';
+    document.getElementById('activeUsers').textContent = 'N/A';
+    document.getElementById('totalServers').textContent = 'N/A';
+    document.getElementById('totalCookies').textContent = 'N/A';
+    document.getElementById('uptime').textContent = 'Unknown';
+    
+    // Show error in leaderboard
+    document.getElementById('leaderboard').innerHTML = '<p style="text-align: center; color: #f44336;">⚠️ Unable to load leaderboard</p>';
+    
+    // Show error in activity
+    document.getElementById('recentActivity').innerHTML = '<p style="text-align: center; color: #f44336;">⚠️ Unable to load activity</p>';
+    
+    // Update timestamp
+    document.getElementById('lastUpdate').textContent = 'Connection failed at: ' + new Date().toLocaleTimeString();
 }
 
 // Claim Daily Points Function
@@ -278,6 +281,9 @@ async function claimDaily() {
                     <div>🎉 Success!</div>
                     <div class="points-animation">+${data.points_earned} POINTS</div>
                     <div>New Balance: ${data.new_balance} points</div>
+                    <div style="margin-top: 10px; font-size: 12px; opacity: 0.8;">
+                        💡 Use Discord bot for role bonuses!
+                    </div>
                 </div>
             `;
             
@@ -291,13 +297,13 @@ async function claimDaily() {
             
         } else {
             // Error handling
-            if (data.error.includes('Already claimed')) {
+            if (data.error.includes('Already claimed') || data.error.includes('Daily already claimed')) {
                 button.textContent = '❌ ALREADY CLAIMED';
                 resultDiv.innerHTML = `
                     <div class="daily-result error">
                         <div>❌ ${data.error}</div>
                         <div>⏰ Time left: ${data.timeLeft}</div>
-                        <div>Next claim: ${new Date(data.nextClaim).toLocaleDateString()}</div>
+                        <div>Next claim: ${new Date(data.nextClaim).toLocaleString()}</div>
                     </div>
                 `;
                 showToast('You already claimed today!', 'error');
@@ -312,6 +318,15 @@ async function claimDaily() {
                 `;
                 showToast('Bot is offline!', 'error');
                 button.disabled = false;
+                
+            } else if (data.error.includes('blacklisted')) {
+                button.textContent = '🚫 BLACKLISTED';
+                resultDiv.innerHTML = `
+                    <div class="daily-result error">
+                        <div>🚫 ${data.error}</div>
+                    </div>
+                `;
+                showToast('You are blacklisted!', 'error');
                 
             } else {
                 button.textContent = '❌ ERROR';
@@ -350,6 +365,13 @@ window.addEventListener('DOMContentLoaded', () => {
     
     document.getElementById('username').addEventListener('keypress', (e) => {
         if (e.key === 'Enter') claimDaily();
+    });
+    
+    // Add retry button functionality
+    document.addEventListener('click', (e) => {
+        if (e.target.id === 'retryButton') {
+            updateStatus();
+        }
     });
 });
 

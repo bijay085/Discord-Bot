@@ -1,322 +1,179 @@
-// script.js - Cookie Bot Status JavaScript (Updated)
+import { MongoClient } from 'mongodb';
 
-// Utility Functions
-function isValidDiscordId(id) {
-    return /^\d{17,20}$/.test(id);
-}
-
-function isValidUsername(username) {
-    return username.length >= 2 && username.length <= 32;
-}
-
-function formatTimeAgo(date) {
-    const now = new Date();
-    const diff = Math.floor((now - date) / 1000);
+export default async function handler(req, res) {
+    // Enable CORS
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST');
     
-    if (diff < 60) return 'Just now';
-    if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
-    if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
-    return Math.floor(diff / 86400) + 'd ago';
-}
-
-// Toast Notification System
-function showToast(message, type = 'info') {
-    const existingToast = document.querySelector('.toast');
-    if (existingToast) existingToast.remove();
-    
-    const toast = document.createElement('div');
-    toast.className = `toast ${type}`;
-    toast.textContent = message;
-    document.body.appendChild(toast);
-    
-    setTimeout(() => toast.remove(), 5000);
-}
-
-// Local Storage Functions
-function saveUserInfo() {
-    const userId = document.getElementById('discordId').value;
-    const username = document.getElementById('username').value;
-    if (userId && username) {
-        localStorage.setItem('discordId', userId);
-        localStorage.setItem('username', username);
-    }
-}
-
-function loadUserInfo() {
-    const savedId = localStorage.getItem('discordId');
-    const savedUsername = localStorage.getItem('username');
-    if (savedId) document.getElementById('discordId').value = savedId;
-    if (savedUsername) document.getElementById('username').value = savedUsername;
-}
-
-// Update Status Display
-function updateStatusDisplay(data) {
-    const statusDot = document.getElementById('statusDot');
-    const statusText = document.getElementById('statusText');
-    const onlineStatus = document.getElementById('onlineStatus');
-    
-    if (data.online) {
-        statusDot.className = 'status-dot online';
-        statusText.textContent = 'ONLINE';
-        statusText.style.color = '#4caf50';
-        onlineStatus.textContent = '🟢';
-        
-        // Only show toast on initial load or status change
-        if (!window.lastOnlineStatus || window.lastOnlineStatus !== data.online) {
-            showToast('Bot is online!', 'success');
-        }
-    } else {
-        statusDot.className = 'status-dot offline';
-        statusText.textContent = 'OFFLINE';
-        statusText.style.color = '#f44336';
-        onlineStatus.textContent = '🔴';
-    }
-    
-    window.lastOnlineStatus = data.online;
-}
-
-// Update Statistics
-function updateStatistics(data) {
-    document.getElementById('totalUsers').textContent = data.totalUsers?.toLocaleString() || '0';
-    document.getElementById('activeUsers').textContent = data.activeUsers?.toLocaleString() || '0';
-    document.getElementById('totalServers').textContent = data.totalServers?.toLocaleString() || '0';
-    document.getElementById('totalCookies').textContent = data.totalCookies?.toLocaleString() || '0';
-    
-    if (data.lastSeen) {
-        const lastSeen = new Date(data.lastSeen);
-        document.getElementById('uptime').textContent = formatTimeAgo(lastSeen);
-    }
-}
-
-// Update Leaderboard
-function updateLeaderboard(data) {
-    const leaderboardDiv = document.getElementById('leaderboard');
-    
-    if (data.leaderboard && data.leaderboard.length > 0) {
-        leaderboardDiv.innerHTML = '';
-        
-        data.leaderboard.forEach((user, index) => {
-            const rankClass = index === 0 ? 'gold' : index === 1 ? 'silver' : index === 2 ? 'bronze' : '';
-            const medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : '';
-            
-            const item = document.createElement('div');
-            item.className = 'leaderboard-item';
-            item.innerHTML = `
-                <div style="display: flex; align-items: center; gap: 15px;">
-                    <span class="rank ${rankClass}">${medal || '#' + user.rank}</span>
-                    <span style="font-weight: bold;">${user.username}</span>
-                </div>
-                <span style="font-weight: bold; color: #667eea;">${user.points.toLocaleString()} pts</span>
-            `;
-            
-            leaderboardDiv.appendChild(item);
-        });
-    } else {
-        leaderboardDiv.innerHTML = '<p style="text-align: center; color: #999;">No users yet</p>';
-    }
-}
-
-// Update Recent Activity
-function updateRecentActivity(data) {
-    const activityDiv = document.getElementById('recentActivity');
-    
-    if (data.recentActivity && data.recentActivity.length > 0) {
-        activityDiv.innerHTML = '<div style="background: #f5f5f5; border-radius: 10px; padding: 15px;">';
-        
-        data.recentActivity.forEach(activity => {
-            const activityItem = document.createElement('div');
-            activityItem.style.cssText = 'padding: 10px; background: white; margin: 10px 0; border-radius: 8px; border-left: 3px solid #667eea;';
-            activityItem.textContent = '📌 ' + activity;
-            activityDiv.firstChild.appendChild(activityItem);
-        });
-    } else {
-        activityDiv.innerHTML = '<p style="text-align: center; color: #999;">No recent activity</p>';
-    }
-}
-
-// Main Update Function
-async function updateStatus() {
-    try {
-        const response = await fetch('/api/status');
-        const data = await response.json();
-        
-        // Hide loading, show content
-        document.getElementById('loading').style.display = 'none';
-        document.getElementById('content').style.display = 'block';
-        
-        // Update all sections
-        updateStatusDisplay(data);
-        updateStatistics(data);
-        updateLeaderboard(data);
-        updateRecentActivity(data);
-        
-        // Update timestamp
-        document.getElementById('lastUpdate').textContent = 'Last updated: ' + new Date().toLocaleTimeString();
-        
-    } catch (error) {
-        console.error('Error fetching status:', error);
-        showToast('Failed to update status', 'error');
-    }
-}
-
-// Claim Daily Points Function
-async function claimDaily() {
-    const userIdInput = document.getElementById('discordId');
-    const usernameInput = document.getElementById('username');
-    const userId = userIdInput.value.trim();
-    const username = usernameInput.value.trim();
-    const button = document.getElementById('claimButton');
-    const resultDiv = document.getElementById('dailyResult');
-    
-    // Reset error states
-    userIdInput.classList.remove('error');
-    usernameInput.classList.remove('error');
-    
-    // Validation
-    let hasError = false;
-    
-    if (!userId) {
-        userIdInput.classList.add('error');
-        hasError = true;
-    } else if (!isValidDiscordId(userId)) {
-        userIdInput.classList.add('error');
-        showToast('Invalid Discord ID! Must be 17-20 digits.', 'error');
-        hasError = true;
-    }
-    
-    if (!username) {
-        usernameInput.classList.add('error');
-        hasError = true;
-    } else if (!isValidUsername(username)) {
-        usernameInput.classList.add('error');
-        showToast('Username must be 2-32 characters!', 'error');
-        hasError = true;
-    }
-    
-    if (hasError) {
-        resultDiv.innerHTML = '<div class="daily-result error">⚠️ Please fill in all fields correctly!</div>';
-        return;
-    }
-    
-    // Save for next time
-    saveUserInfo();
-    
-    // Disable button and show loading
-    button.disabled = true;
-    button.textContent = '⏳ CLAIMING...';
-    resultDiv.innerHTML = '';
+    let client;
     
     try {
-        const response = await fetch('/api/daily', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ userId, username })
+        // Connect to MongoDB
+        client = new MongoClient(process.env.MONGODB_URI);
+        await client.connect();
+        
+        const db = client.db(process.env.DATABASE_NAME || 'discord_bot');
+        
+        // Get bot config
+        const config = await db.collection('config').findOne({ _id: 'bot_config' });
+        
+        // Check if bot is online (last activity within 5 minutes)
+        const lastActivity = config?.last_activity;
+        const isOnline = lastActivity && 
+            (new Date() - new Date(lastActivity)) < (5 * 60 * 1000);
+        
+        // Get statistics
+        const totalUsers = await db.collection('users').countDocuments({});
+        const now = new Date();
+        const todayStart = new Date(now.setUTCHours(0, 0, 0, 0));
+        
+        const activeToday = await db.collection('users').countDocuments({
+            last_active: { $gte: todayStart }
         });
         
-        const data = await response.json();
+        const totalServers = await db.collection('servers').countDocuments({});
+        const enabledServers = await db.collection('servers').countDocuments({ enabled: true });
         
-        if (response.ok) {
-            // Success
-            button.classList.add('success');
-            button.textContent = '✅ CLAIMED!';
-            
-            resultDiv.innerHTML = `
-                <div class="daily-result success">
-                    <div>🎉 Success!</div>
-                    <div class="points-animation">+${data.points_earned} POINTS</div>
-                    <div>New Balance: ${data.new_balance} points</div>
-                    <div style="margin-top: 10px; font-size: 12px; opacity: 0.8;">
-                        💡 Use Discord bot for role bonuses!
-                    </div>
-                </div>
-            `;
-            
-            showToast('Daily points claimed successfully!', 'success');
-            
-            // Reset button after 3 seconds
-            setTimeout(() => {
-                button.classList.remove('success');
-                button.textContent = 'CLAIMED TODAY ✓';
-            }, 3000);
-            
+        const stats = await db.collection('statistics').findOne({ _id: 'global_stats' });
+        
+        // REMOVED cookie stock fetching - not needed anymore
+        
+        // Get leaderboard - top 10 users by points
+        const topUsers = await db.collection('users')
+            .find(
+                { 
+                    blacklisted: { $ne: true },
+                    points: { $gt: 0 }
+                },
+                { 
+                    projection: { 
+                        username: 1, 
+                        points: 1, 
+                        trust_score: 1,
+                        total_claims: 1,
+                        user_id: 1
+                    } 
+                }
+            )
+            .sort({ points: -1 })
+            .limit(10)
+            .toArray();
+        
+        // Format leaderboard
+        const leaderboard = topUsers.map((user, index) => ({
+            rank: index + 1,
+            username: user.username || 'Unknown User',
+            points: user.points,
+            trust_score: user.trust_score || 50,
+            total_claims: user.total_claims || 0,
+            user_id: user.user_id
+        }));
+        
+        // Get recent activity - last 10 claims
+        const recentClaims = await db.collection('cookie_logs')
+            .find({})
+            .sort({ timestamp: -1 })
+            .limit(10)
+            .toArray();
+        
+        // If no cookie_logs, try to get from users' last_claim
+        let recentActivity = [];
+        
+        if (recentClaims.length > 0) {
+            recentActivity = await Promise.all(recentClaims.map(async (claim) => {
+                const user = await db.collection('users').findOne(
+                    { user_id: claim.user_id },
+                    { projection: { username: 1 } }
+                );
+                
+                const timeAgo = Math.floor((new Date() - new Date(claim.timestamp)) / 60000);
+                return `${user?.username || 'Unknown'} claimed ${claim.cookie_type} (${timeAgo}m ago)`;
+            }));
         } else {
-            // Error handling
-            if (data.error.includes('Already claimed') || data.error.includes('Daily already claimed')) {
-                button.textContent = '❌ ALREADY CLAIMED';
-                resultDiv.innerHTML = `
-                    <div class="daily-result error">
-                        <div>❌ ${data.error}</div>
-                        <div>⏰ Time left: ${data.timeLeft}</div>
-                        <div>Next claim: ${new Date(data.nextClaim).toLocaleString()}</div>
-                    </div>
-                `;
-                showToast('You already claimed today!', 'error');
-                
-            } else if (data.error.includes('offline')) {
-                button.textContent = '🔴 BOT OFFLINE';
-                resultDiv.innerHTML = `
-                    <div class="daily-result error">
-                        <div>🔴 Bot is offline!</div>
-                        <div>Please wait for the bot to come online.</div>
-                    </div>
-                `;
-                showToast('Bot is offline!', 'error');
-                button.disabled = false;
-                
-            } else if (data.error.includes('blacklisted')) {
-                button.textContent = '🚫 BLACKLISTED';
-                resultDiv.innerHTML = `
-                    <div class="daily-result error">
-                        <div>🚫 ${data.error}</div>
-                    </div>
-                `;
-                showToast('You are blacklisted!', 'error');
-                
+            // Fallback to users with recent claims
+            const usersWithClaims = await db.collection('users')
+                .find({ 
+                    'last_claim.date': { $exists: true } 
+                })
+                .sort({ 'last_claim.date': -1 })
+                .limit(5)
+                .toArray();
+            
+            recentActivity = usersWithClaims.map(user => {
+                if (user.last_claim?.date) {
+                    const timeAgo = Math.floor((new Date() - new Date(user.last_claim.date)) / 60000);
+                    return `${user.username} claimed ${user.last_claim.type || 'cookie'} (${timeAgo}m ago)`;
+                }
+                return null;
+            }).filter(Boolean);
+        }
+        
+        // Get daily claims count
+        const dailyClaimsToday = await db.collection('users').countDocuments({
+            daily_claimed: { $gte: todayStart }
+        });
+        
+        // REMOVED game stats - not needed for status page
+        
+        // Check if a specific user exists (if userId query param provided)
+        let userData = null;
+        if (req.query.userId) {
+            const userIdNum = parseInt(req.query.userId);
+            const user = await db.collection('users').findOne({ user_id: userIdNum });
+            
+            if (user) {
+                userData = {
+                    exists: true,
+                    username: user.username,
+                    points: user.points,
+                    trust_score: user.trust_score,
+                    total_claims: user.total_claims,
+                    daily_claimed: user.daily_claimed,
+                    blacklisted: user.blacklisted,
+                    can_claim_daily: !user.daily_claimed || 
+                        (new Date() - new Date(user.daily_claimed)) >= (24 * 60 * 60 * 1000)
+                };
             } else {
-                button.textContent = '❌ ERROR';
-                resultDiv.innerHTML = `
-                    <div class="daily-result error">
-                        <div>❌ ${data.error}</div>
-                    </div>
-                `;
-                showToast(data.error, 'error');
-                button.disabled = false;
+                userData = { exists: false };
             }
         }
         
+        // Build response
+        const response = {
+            online: isOnline,
+            lastSeen: lastActivity,
+            totalUsers,
+            activeUsers: activeToday,
+            totalServers,
+            enabledServers,
+            totalCookies: stats?.all_time_claims || 0,
+            dailyClaimsToday,
+            leaderboard,
+            recentActivity,
+            uptime: config?.current_uptime || null,
+            maintenanceMode: config?.maintenance_mode || false,
+            botVersion: config?.version || '2.0.0',
+            timestamp: new Date()
+        };
+        
+        // Add user data if requested
+        if (userData) {
+            response.userData = userData;
+        }
+        
+        // Send response
+        res.status(200).json(response);
+        
     } catch (error) {
-        console.error('Error:', error);
-        button.textContent = 'TRY AGAIN';
-        button.disabled = false;
-        resultDiv.innerHTML = `
-            <div class="daily-result error">
-                ❌ Connection error! Please try again.
-            </div>
-        `;
-        showToast('Connection error!', 'error');
+        console.error('Database error:', error);
+        res.status(500).json({ 
+            error: 'Database connection failed',
+            online: false,
+            details: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    } finally {
+        if (client) {
+            await client.close();
+        }
     }
 }
-
-// Event Listeners
-window.addEventListener('DOMContentLoaded', () => {
-    loadUserInfo();
-    updateStatus();
-    
-    // Add enter key support
-    document.getElementById('discordId').addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') claimDaily();
-    });
-    
-    document.getElementById('username').addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') claimDaily();
-    });
-});
-
-// Auto-update every 30 seconds
-setInterval(updateStatus, 30000);
-
-// Export functions for global access
-window.claimDaily = claimDaily;
-window.updateStatus = updateStatus;
