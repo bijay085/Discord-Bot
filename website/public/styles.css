@@ -1,4 +1,4 @@
-/* Bubble Bot - Complete CSS File */
+/* Bubble Bot - Complete CSS File with Clear Feedback */
 
 /* ============================================
    1. Variables
@@ -154,20 +154,23 @@ nav {
     height: 8px;
     border-radius: 50%;
     background: var(--text-muted);
+    transition: all 0.3s ease;
 }
 
 .status-dot.online {
     background: var(--success);
+    box-shadow: 0 0 8px rgba(16, 185, 129, 0.5);
     animation: pulse 2s ease-in-out infinite;
 }
 
 .status-dot.offline {
     background: var(--danger);
+    box-shadow: 0 0 8px rgba(239, 68, 68, 0.5);
 }
 
 @keyframes pulse {
-    0%, 100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4); }
-    50% { box-shadow: 0 0 0 8px rgba(16, 185, 129, 0); }
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
 }
 
 .status-text {
@@ -328,41 +331,70 @@ nav {
 .badge-live {
     background: rgba(16, 185, 129, 0.1);
     color: var(--success);
-    position: relative;
-}
-
-.badge-live::after {
-    content: '';
-    position: absolute;
-    top: -50%;
-    left: -50%;
-    width: 200%;
-    height: 200%;
-    background: linear-gradient(45deg, transparent 30%, rgba(255, 255, 255, 0.1) 50%, transparent 70%);
-    animation: shimmer 3s infinite;
-}
-
-@keyframes shimmer {
-    0% { transform: translateX(-100%) translateY(-100%); }
-    100% { transform: translateX(100%) translateY(100%); }
 }
 
 /* ============================================
-   10. Alerts
+   10. IMPROVED ALERTS - CLEAR FEEDBACK
    ============================================ */
 .alert {
-    padding: var(--space-sm);
-    background: var(--bg-hover);
-    border: 1px solid var(--border);
+    padding: var(--space-sm) var(--space-md);
     border-radius: var(--radius);
     display: flex;
     gap: var(--space-sm);
     margin-bottom: var(--space-md);
+    position: relative;
+    overflow: hidden;
+    animation: slideDown 0.3s ease-out;
 }
 
+/* Left border indicator */
+.alert::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0;
+    height: 100%;
+    width: 4px;
+}
+
+/* Info Alert - Blue */
 .alert-info {
-    background: rgba(14, 165, 233, 0.05);
-    border-color: rgba(14, 165, 233, 0.2);
+    background: rgba(14, 165, 233, 0.1);
+    border: 1px solid rgba(14, 165, 233, 0.3);
+}
+
+.alert-info::before {
+    background: var(--info);
+}
+
+/* Success Alert - Green */
+.alert-success {
+    background: rgba(16, 185, 129, 0.1);
+    border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.alert-success::before {
+    background: var(--success);
+}
+
+/* Warning Alert - Yellow */
+.alert-warning {
+    background: rgba(245, 158, 11, 0.1);
+    border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.alert-warning::before {
+    background: var(--warning);
+}
+
+/* Error Alert - Red */
+.alert-error {
+    background: rgba(239, 68, 68, 0.1);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.alert-error::before {
+    background: var(--danger);
 }
 
 .alert-icon {
@@ -378,25 +410,40 @@ nav {
     display: block;
     margin-bottom: 0.25rem;
     color: var(--text-primary);
+    font-size: 1rem;
 }
 
 .alert-content p {
-    font-size: 0.875rem;
+    font-size: 0.9rem;
     margin: 0;
+    color: var(--text-secondary);
+    line-height: 1.4;
 }
 
 /* ============================================
-   11. Timer
+   11. IMPROVED TIMER BOX
    ============================================ */
 .timer-box {
-    background: var(--bg-hover);
-    border: 1px solid var(--border);
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.05), rgba(139, 92, 246, 0.05));
+    border: 1px solid rgba(59, 130, 246, 0.3);
     border-radius: var(--radius);
     padding: var(--space-md);
     display: flex;
     align-items: center;
     gap: var(--space-sm);
     margin-bottom: var(--space-md);
+    position: relative;
+    overflow: hidden;
+}
+
+.timer-box::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0;
+    height: 100%;
+    width: 4px;
+    background: var(--accent);
 }
 
 .timer-icon {
@@ -421,10 +468,11 @@ nav {
     font-weight: 700;
     color: var(--accent);
     font-variant-numeric: tabular-nums;
+    font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
 }
 
 /* ============================================
-   12. Forms
+   12. IMPROVED FORM STYLES
    ============================================ */
 .claim-form {
     display: flex;
@@ -449,7 +497,7 @@ nav {
 .form-input {
     padding: var(--space-sm);
     background: var(--bg-secondary);
-    border: 1px solid var(--border);
+    border: 2px solid var(--border);
     border-radius: var(--radius);
     color: var(--text-primary);
     font-size: 1.125rem;
@@ -461,22 +509,33 @@ nav {
     outline: none;
     border-color: var(--accent);
     background: var(--bg-primary);
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.15);
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+/* Input validation states */
+.form-input.success {
+    border-color: var(--success);
+    background: rgba(16, 185, 129, 0.05);
+}
+
+.form-input.error {
+    border-color: var(--danger);
+    background: rgba(239, 68, 68, 0.05);
 }
 
 .form-help {
     display: flex;
     justify-content: space-between;
-    font-size: 1rem;
+    font-size: 0.875rem;
     color: var(--text-muted);
+    transition: color 0.3s ease;
 }
 
 /* ============================================
-   13. Buttons
+   13. IMPROVED BUTTONS
    ============================================ */
 
-/* Daily Claim Button */
+/* Primary Button - Clear States */
 .btn-primary {
     padding: 1rem 2rem;
     background: linear-gradient(45deg, #3b82f6, #8b5cf6);
@@ -500,17 +559,42 @@ nav {
 }
 
 .btn-primary:hover:not(:disabled) {
-    transform: translateY(-3px) scale(1.02);
-    box-shadow: 0 8px 25px rgba(59, 130, 246, 0.4);
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(59, 130, 246, 0.4);
 }
 
+/* Success State - Green */
+.btn-primary.success {
+    background: linear-gradient(45deg, #10b981, #059669) !important;
+    animation: successPulse 0.5s ease;
+}
+
+/* Error State - Red */
+.btn-primary.error {
+    background: linear-gradient(45deg, #ef4444, #dc2626) !important;
+    animation: errorShake 0.5s ease;
+}
+
+/* Disabled State - Gray */
 .btn-primary:disabled {
-    background: #4b5563;
+    background: linear-gradient(45deg, #4b5563, #374151) !important;
     opacity: 0.7;
     cursor: not-allowed;
+    transform: none !important;
 }
 
-/* Discord Button - Header */
+@keyframes successPulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.05); }
+}
+
+@keyframes errorShake {
+    0%, 100% { transform: translateX(0); }
+    25% { transform: translateX(-5px); }
+    75% { transform: translateX(5px); }
+}
+
+/* Discord Button */
 .btn-secondary {
     padding: 0.625rem 1.25rem;
     background: transparent;
@@ -561,14 +645,14 @@ nav {
     transform: translateX(3px);
 }
 
-/* Shop Button - LIGHTER AND SMALLER */
+/* Shop Button */
 .shop-btn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
     gap: var(--space-xs);
     padding: 0.875rem 2rem;
-    background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+    background: linear-gradient(135deg, #224681, #8b5cf6);
     color: white;
     border: none;
     border-radius: 50px;
@@ -578,74 +662,42 @@ nav {
     letter-spacing: 0.08em;
     text-decoration: none;
     transition: all 0.3s ease;
-    box-shadow: 0 4px 15px rgba(147, 197, 253, 0.3);
-    position: relative;
-    overflow: hidden;
+    box-shadow: 0 4px 15px rgba(108, 165, 230, 0.3);
 }
 
 .shop-btn:hover {
-    transform: translateY(-2px) !important;
-    box-shadow: 0 6px 20px rgba(56, 97, 143, 0.4) !important;
-    background: linear-gradient(135deg, #3a587b, #4d3d93) !important;
+    transform: translateY(-2px);
+    background: linear-gradient(135deg, #62693f, #8b5cf6);
+    box-shadow: 0 6px 20px rgba(66, 86, 109, 0.4);
 }
 
 .shop-btn-icon {
     font-size: 1.1rem;
 }
 
-/* Community Buttons - SMALLER */
-.community-link {
-    flex: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.4rem;
-    padding: 0.75rem 1rem;
-    border-radius: 50px;
-    color: #a3a3a3;
-    text-decoration: none;
-    font-size: 0.875rem;
-    font-weight: 500;
-    transition: all 0.3s ease;
-    min-height: 44px;
-}
-
-/* Discord Button */
-.community-link:first-child {
-    border: 1.5px solid #5865f2;
-    background: rgba(88, 101, 242, 0.05);
-}
-
-.community-link:first-child:hover {
-    background: #5865f2;
-    color: white !important;
-    transform: translateY(-2px);
-    box-shadow: 0 6px 16px rgba(88, 101, 242, 0.3);
-}
-
-/* Telegram Button */
-.community-link:last-child {
-    border: 1.5px solid #0088cc;
-    background: rgba(0, 136, 204, 0.05);
-}
-
-.community-link:last-child:hover {
-    background: #0088cc;
-    color: white !important;
-    transform: translateY(-2px);
-    box-shadow: 0 6px 16px rgba(0, 136, 204, 0.3);
-}
-
 /* ============================================
-   14. Balance Box
+   14. IMPROVED BALANCE BOX
    ============================================ */
 .balance-box {
-    background: rgba(16, 185, 129, 0.05);
-    border: 1px solid rgba(16, 185, 129, 0.2);
+    background: linear-gradient(135deg, rgba(16, 185, 129, 0.1), rgba(5, 150, 105, 0.05));
+    border: 1px solid rgba(16, 185, 129, 0.3);
     border-radius: var(--radius);
     padding: var(--space-sm);
     text-align: center;
     margin-top: var(--space-md);
+    position: relative;
+    overflow: hidden;
+    transition: all 0.3s ease;
+}
+
+.balance-box::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0;
+    height: 100%;
+    width: 4px;
+    background: var(--success);
 }
 
 .balance-label {
@@ -662,6 +714,7 @@ nav {
     font-weight: 700;
     color: var(--success);
     margin-top: 0.25rem;
+    font-variant-numeric: tabular-nums;
 }
 
 /* ============================================
@@ -764,19 +817,39 @@ nav {
     transition: transform 0.3s ease;
 }
 
-.leaderboard-item:hover::before {
-    transform: scaleY(1);
-}
-
 .leaderboard-item:hover {
     background: var(--bg-hover);
-    padding-left: calc(var(--space-sm) + 6px);
+    transform: translateX(6px);
+}
+
+.leaderboard-item:hover::before {
+    transform: scaleY(1);
 }
 
 .leaderboard-rank {
     display: flex;
     align-items: center;
     gap: var(--space-sm);
+}
+
+.rank-number {
+    font-weight: 600;
+    min-width: 30px;
+}
+
+.rank-number.gold {
+    color: #ffd700;
+    font-size: 1.25rem;
+}
+
+.rank-number.silver {
+    color: #c0c0c0;
+    font-size: 1.25rem;
+}
+
+.rank-number.bronze {
+    color: #cd7f32;
+    font-size: 1.25rem;
 }
 
 .leaderboard-name {
@@ -828,7 +901,7 @@ nav {
 }
 
 /* ============================================
-   18. Community Section - ROUNDED BUTTONS
+   18. Community Section
    ============================================ */
 .community-desc {
     font-size: 0.95rem;
@@ -850,8 +923,8 @@ nav {
     align-items: center;
     justify-content: center;
     gap: 0.5rem;
-    padding: 0.4rem 0.7rem;  
-    border-radius: 50px; /* FULLY ROUNDED */
+    padding: 0.4rem 0.5rem;
+    border-radius: 50px;
     color: #a3a3a3;
     text-decoration: none;
     font-size: 0.95rem;
@@ -945,6 +1018,20 @@ footer p {
     color: var(--text-muted);
 }
 
+/* Spinner */
+.spinner {
+    width: 16px;
+    height: 16px;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-top-color: white;
+    border-radius: 50%;
+    animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
 /* ============================================
    21. Animations
    ============================================ */
@@ -964,8 +1051,24 @@ footer p {
     }
 }
 
+@keyframes slideDown {
+    from {
+        opacity: 0;
+        transform: translateY(-10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes bounce {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.1); }
+}
+
 /* ============================================
-   22. Responsive
+   22. Responsive - Mobile Optimized
    ============================================ */
 @media (max-width: 1024px) {
     .primary-grid,
@@ -976,6 +1079,10 @@ footer p {
 }
 
 @media (max-width: 768px) {
+    body {
+        font-size: 16px;
+    }
+    
     .stats-row {
         gap: var(--space-lg);
     }
@@ -986,12 +1093,32 @@ footer p {
     }
     
     .cta-content {
-        flex-direction: column;
-        text-align: center;
+        padding: var(--space-md);
     }
     
     .community-links {
         flex-direction: column;
+    }
+    
+    /* Mobile Alert Styles */
+    .alert {
+        position: fixed;
+        bottom: 20px;
+        left: 10px;
+        right: 10px;
+        z-index: 1000;
+        margin-bottom: 0;
+        box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.3);
+    }
+    
+    .timer-box {
+        position: fixed;
+        bottom: 20px;
+        left: 10px;
+        right: 10px;
+        z-index: 999;
+        margin-bottom: 0;
+        box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.3);
     }
 }
 
@@ -1009,12 +1136,31 @@ footer p {
         grid-template-columns: repeat(2, 1fr);
         gap: var(--space-md);
     }
-}
-@keyframes bounce {
-    0%, 100% { transform: scale(1); }
-    50% { transform: scale(1.1); }
-}
-
-.btn-primary.success {
-    background: linear-gradient(45deg, #10b981, #059669) !important;
+    
+    .stat-value {
+        font-size: 1.5rem;
+    }
+    
+    .hero-title {
+        font-size: 1.75rem;
+    }
+    
+    /* Mobile Form Adjustments */
+    .form-input {
+        font-size: 16px; /* Prevents zoom on iOS */
+    }
+    
+    .btn-primary {
+        width: 100%;
+        padding: 1rem;
+    }
+    
+    /* Mobile Balance Box */
+    .balance-box {
+        position: sticky;
+        top: 70px;
+        z-index: 50;
+        background: var(--bg-card);
+        border: 2px solid rgba(16, 185, 129, 0.4);
+    }
 }

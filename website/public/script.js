@@ -1,5 +1,5 @@
-// Bubble Bot - Redesigned JavaScript
-// Clean, efficient, no unnecessary animations
+// Bubble Bot - Complete JavaScript with Clear Feedback System
+// Simple, clean, no duplicate messages
 
 // ============================================
 // Configuration
@@ -10,8 +10,8 @@ const CONFIG = {
         : '/api',
     UPDATE_INTERVAL: 30000,
     COOLDOWN_DURATION: 86400000, // 24 hours
-    MIN_ID_LENGTH: 15,
-    MAX_ID_LENGTH: 25
+    MIN_ID_LENGTH: 17,
+    MAX_ID_LENGTH: 20
 };
 
 // ============================================
@@ -21,7 +21,8 @@ const state = {
     isOnline: false,
     cooldownTimer: null,
     updateInterval: null,
-    lastClaimTime: 0
+    lastClaimTime: 0,
+    isProcessing: false // Prevent double clicks
 };
 
 // ============================================
@@ -95,6 +96,9 @@ function loadSavedData() {
     if (lastClaim) {
         state.lastClaimTime = parseInt(lastClaim);
         checkCooldown();
+    } else {
+        // Show initial help message only if no cooldown
+        showAlert('info', 'Enter your Discord ID to claim 2 points daily. Use our discord bubble bot to get points on the basis of role !');
     }
 }
 
@@ -140,19 +144,25 @@ function validateInput() {
     
     const length = value.length;
     
-    // Update character count
+    // Update character count and input state
     if (elements.charCount) {
-        elements.charCount.textContent = `${length}/${CONFIG.MIN_ID_LENGTH}-${CONFIG.MAX_ID_LENGTH}`;
-        
         if (length === 0) {
+            elements.charCount.textContent = `${CONFIG.MIN_ID_LENGTH}-${CONFIG.MAX_ID_LENGTH} digits`;
             elements.charCount.style.color = 'var(--text-muted)';
             input.classList.remove('error', 'success');
         } else if (length >= CONFIG.MIN_ID_LENGTH && length <= CONFIG.MAX_ID_LENGTH) {
+            elements.charCount.textContent = `✓ Valid (${length} digits)`;
             elements.charCount.style.color = 'var(--success)';
             input.classList.remove('error');
             input.classList.add('success');
-        } else {
+        } else if (length < CONFIG.MIN_ID_LENGTH) {
+            elements.charCount.textContent = `${CONFIG.MIN_ID_LENGTH - length} more digits needed`;
             elements.charCount.style.color = 'var(--warning)';
+            input.classList.add('error');
+            input.classList.remove('success');
+        } else {
+            elements.charCount.textContent = `Too long! Max ${CONFIG.MAX_ID_LENGTH} digits`;
+            elements.charCount.style.color = 'var(--danger)';
             input.classList.add('error');
             input.classList.remove('success');
         }
@@ -283,16 +293,18 @@ function updateLeaderboard(leaderboard) {
 async function handleClaim(e) {
     e.preventDefault();
     
-    // Rate limiting
-    const now = Date.now();
-    if (now - state.lastClaimTime < 2000) {
-        showAlert('warning', 'Please wait a moment before trying again.');
+    // Prevent double submission
+    if (state.isProcessing) {
         return;
     }
     
     // Validate input
     if (!validateInput()) {
         showAlert('error', `Discord ID must be ${CONFIG.MIN_ID_LENGTH}-${CONFIG.MAX_ID_LENGTH} digits.`);
+        elements.userId.focus();
+        // Shake the input field
+        elements.userId.style.animation = 'errorShake 0.5s';
+        setTimeout(() => elements.userId.style.animation = '', 500);
         return;
     }
     
@@ -301,7 +313,8 @@ async function handleClaim(e) {
     // Save Discord ID
     localStorage.setItem('discordId', userId);
     
-    // Update UI
+    // Set processing state
+    state.isProcessing = true;
     setLoadingState(true);
     hideAlerts();
     
@@ -325,9 +338,10 @@ async function handleClaim(e) {
     } catch (error) {
         console.error('Claim error:', error);
         showAlert('error', 'Connection failed. Please check your internet and try again.');
+        setButtonState('error');
     } finally {
+        state.isProcessing = false;
         setLoadingState(false);
-        state.lastClaimTime = now;
     }
 }
 
@@ -335,76 +349,88 @@ async function handleClaim(e) {
 // Handle Claim Success
 // ============================================
 function handleClaimSuccess(data) {
-    // Show success state
-    elements.claimButton.classList.add('success');
-    elements.buttonText.textContent = '✓ Claimed Successfully!';
-    
-    // Simple success bounce
-    elements.claimButton.style.animation = 'bounce 0.5s';
-    setTimeout(() => elements.claimButton.style.animation = '', 500);
-    
     // Show success message
-    showAlert('success', `You received ${data.points} points! Balance: ${formatNumber(data.balance)} points`);
+    showAlert('success', `Great! You received ${data.points} points! Your balance is now ${formatNumber(data.balance)} points.`);
     
-    // Update balance
+    // Update button to success state
+    setButtonState('success');
+    
+    // Update balance display with animation
     if (elements.balanceBox && elements.balanceValue) {
         elements.balanceBox.classList.remove('hidden');
+        
+        // Add highlight animation
+        elements.balanceBox.style.animation = 'bounce 0.5s';
+        setTimeout(() => elements.balanceBox.style.animation = '', 500);
+        
         elements.balanceValue.textContent = `${formatNumber(data.balance)} points`;
         localStorage.setItem('lastBalance', data.balance);
     }
     
-    // Start cooldown
+    // Start cooldown timer
     if (data.next) {
         const nextClaim = new Date(data.next);
         localStorage.setItem('lastClaimTime', Date.now().toString());
-        startCooldownTimer(nextClaim);
+        
+        // Wait a bit before showing timer so success message is visible
+        setTimeout(() => {
+            startCooldownTimer(nextClaim);
+        }, 2000);
     }
     
-    // Reset button after delay
-    setTimeout(() => {
-        elements.claimButton.classList.remove('success');
-        elements.buttonText.textContent = 'Already Claimed Today';
-        elements.claimButton.disabled = true;
-    }, 3000);
-    
-    // Update stats
-    updateStatus();
+    // Update stats after claim
+    setTimeout(updateStatus, 1000);
 }
 
 // ============================================
 // Handle Claim Error
 // ============================================
 function handleClaimError(data, statusCode) {
-    // Show error state
-    elements.claimButton.classList.add('error');
-    elements.buttonText.textContent = '✗ Claim Failed';
-    
-    setTimeout(() => {
-        elements.claimButton.classList.remove('error');
-        elements.buttonText.textContent = 'Claim Daily Points';
-    }, 3000);
-    
-    // Handle specific errors
     const error = data.error || 'Unknown error occurred';
     
-    if (error.includes('Already claimed')) {
-        showAlert('warning', `Already claimed. Next claim: ${data.timeLeft || 'in 24 hours'}`);
-        if (data.balance) {
+    // Handle specific error cases with clear messages
+    if (statusCode === 429 && error.includes('Already claimed')) {
+        // Already claimed today
+        showAlert('warning', `You've already claimed today! Come back in ${data.timeLeft || '24 hours'} for your next claim.`);
+        
+        // Update balance if provided
+        if (data.balance !== undefined) {
             elements.balanceBox.classList.remove('hidden');
             elements.balanceValue.textContent = `${formatNumber(data.balance)} points`;
             localStorage.setItem('lastBalance', data.balance);
         }
+        
+        // Start cooldown timer
         if (data.nextClaim) {
             startCooldownTimer(new Date(data.nextClaim));
         }
-    } else if (statusCode === 400) {
-        showAlert('error', 'Invalid Discord ID. Please check and try again.');
-    } else if (statusCode === 403) {
-        showAlert('error', 'Account restricted. Contact support if this is an error.');
+        
+        setButtonState('disabled');
+        
     } else if (statusCode === 429) {
-        showAlert('warning', `Too many requests. Wait ${data.retryAfter || 'a moment'}.`);
+        // Rate limited
+        showAlert('warning', `Too fast! Please wait ${data.retryAfter || 2} seconds and try again.`);
+        setButtonState('error');
+        
+    } else if (statusCode === 400) {
+        // Invalid Discord ID
+        showAlert('error', 'Invalid Discord ID format. Please enter a valid 17-20 digit Discord ID.');
+        setButtonState('error');
+        
+    } else if (statusCode === 403) {
+        // Account blacklisted
+        showAlert('error', 'Your account has been restricted. Please contact support if you believe this is an error.');
+        setButtonState('error');
+        
+    } else if (statusCode === 500 || statusCode === 503) {
+        // Server error
+        showAlert('error', 'The service is temporarily unavailable. Please try again in a few minutes.');
+        setButtonState('error');
+        
     } else {
+        // Generic error
         showAlert('error', error);
+        setButtonState('error');
     }
 }
 
@@ -414,6 +440,11 @@ function handleClaimError(data, statusCode) {
 function showAlert(type, message) {
     if (!elements.alertBox) return;
     
+    // Hide timer box when showing non-info alerts
+    if (type !== 'info' && elements.timerBox) {
+        elements.timerBox.classList.add('hidden');
+    }
+    
     const icons = {
         info: 'ℹ️',
         success: '✅',
@@ -421,15 +452,29 @@ function showAlert(type, message) {
         error: '❌'
     };
     
+    // Clear and set new alert
     elements.alertBox.className = `alert alert-${type}`;
     elements.alertBox.innerHTML = `
         <span class="alert-icon">${icons[type]}</span>
         <div class="alert-content">
+            <strong>${type.charAt(0).toUpperCase() + type.slice(1)}</strong>
             <p>${message}</p>
         </div>
     `;
     
     elements.alertBox.classList.remove('hidden');
+    
+    // Add slide animation
+    elements.alertBox.style.animation = 'slideDown 0.3s ease-out';
+    
+    // Auto-hide success messages after 5 seconds
+    if (type === 'success') {
+        setTimeout(() => {
+            if (elements.alertBox.classList.contains('alert-success')) {
+                hideAlerts();
+            }
+        }, 5000);
+    }
 }
 
 // ============================================
@@ -451,10 +496,56 @@ function setLoadingState(loading) {
     
     if (loading) {
         elements.spinner.classList.remove('hidden');
-        elements.buttonText.textContent = 'Claiming...';
+        elements.buttonText.textContent = 'Processing...';
+        elements.claimButton.style.cursor = 'wait';
     } else {
         elements.spinner.classList.add('hidden');
-        elements.buttonText.textContent = 'Claim Daily Points';
+        elements.claimButton.style.cursor = 'pointer';
+    }
+}
+
+// ============================================
+// Set Button State
+// ============================================
+function setButtonState(state) {
+    if (!elements.claimButton) return;
+    
+    // Remove all state classes
+    elements.claimButton.classList.remove('success', 'error');
+    
+    switch(state) {
+        case 'success':
+            elements.claimButton.classList.add('success');
+            elements.buttonText.textContent = '✅ Claimed Successfully!';
+            elements.claimButton.disabled = true;
+            
+            // Reset after 3 seconds
+            setTimeout(() => {
+                elements.claimButton.classList.remove('success');
+                elements.buttonText.textContent = 'Already Claimed Today';
+            }, 3000);
+            break;
+            
+        case 'error':
+            elements.claimButton.classList.add('error');
+            elements.buttonText.textContent = '❌ Try Again';
+            
+            // Reset after 3 seconds
+            setTimeout(() => {
+                elements.claimButton.classList.remove('error');
+                elements.buttonText.textContent = 'Claim Daily Points';
+                elements.claimButton.disabled = false;
+            }, 3000);
+            break;
+            
+        case 'disabled':
+            elements.buttonText.textContent = 'Already Claimed Today';
+            elements.claimButton.disabled = true;
+            break;
+            
+        default:
+            elements.buttonText.textContent = 'Claim Daily Points';
+            elements.claimButton.disabled = false;
     }
 }
 
@@ -467,10 +558,18 @@ function startCooldownTimer(nextClaimTime) {
         clearInterval(state.cooldownTimer);
     }
     
+    // Hide alert box when timer starts
+    hideAlerts();
+    
     // Show timer box
     if (elements.timerBox) {
         elements.timerBox.classList.remove('hidden');
+        elements.timerBox.style.animation = 'slideDown 0.3s ease-out';
     }
+    
+    // Disable claim button
+    elements.claimButton.disabled = true;
+    elements.buttonText.textContent = 'Already Claimed Today';
     
     // Update timer function
     const updateTimer = () => {
@@ -484,11 +583,26 @@ function startCooldownTimer(nextClaimTime) {
                 state.cooldownTimer = null;
             }
             
+            // Hide timer
             elements.timerBox.classList.add('hidden');
+            
+            // Enable button
             elements.claimButton.disabled = false;
             elements.buttonText.textContent = 'Claim Daily Points';
             
+            // Clear saved time
             localStorage.removeItem('lastClaimTime');
+            
+            // Show ready message
+            showAlert('success', '🎉 Your daily claim is ready! Claim your points now!');
+            
+            // Play a subtle sound if available (optional)
+            try {
+                const audio = new Audio('data:audio/wav;base64,UklGRigAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQQAAACAAABgAA==');
+                audio.volume = 0.3;
+                audio.play();
+            } catch(e) {}
+            
             return;
         }
         
@@ -504,7 +618,7 @@ function startCooldownTimer(nextClaimTime) {
         }
     };
     
-    // Start timer
+    // Start timer immediately
     updateTimer();
     state.cooldownTimer = setInterval(updateTimer, 1000);
 }
@@ -522,14 +636,10 @@ function checkCooldown() {
         // Still in cooldown
         const nextClaim = new Date(state.lastClaimTime + CONFIG.COOLDOWN_DURATION);
         startCooldownTimer(nextClaim);
-        
-        if (elements.claimButton) {
-            elements.claimButton.disabled = true;
-            elements.buttonText.textContent = 'Already Claimed Today';
-        }
     } else {
         // Cooldown expired
         localStorage.removeItem('lastClaimTime');
+        showAlert('info', 'Your daily claim is ready! Enter your Discord ID to claim 2 points.');
     }
 }
 
@@ -557,3 +667,41 @@ window.addEventListener('beforeunload', () => {
         clearInterval(state.updateInterval);
     }
 });
+
+// ============================================
+// Page Visibility API - Pause/Resume timers
+// ============================================
+document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+        // Page is hidden, clear update interval to save resources
+        if (state.updateInterval) {
+            clearInterval(state.updateInterval);
+            state.updateInterval = null;
+        }
+    } else {
+        // Page is visible again, restart updates
+        if (!state.updateInterval) {
+            updateStatus();
+            state.updateInterval = setInterval(updateStatus, CONFIG.UPDATE_INTERVAL);
+        }
+    }
+});
+
+// ============================================
+// Debug Mode (only in development)
+// ============================================
+if (window.location.hostname === 'localhost') {
+    window.debugReset = () => {
+        localStorage.clear();
+        location.reload();
+        console.log('Debug: All data cleared');
+    };
+    
+    window.debugClaim = () => {
+        localStorage.removeItem('lastClaimTime');
+        location.reload();
+        console.log('Debug: Claim timer reset');
+    };
+    
+    console.log('Debug mode enabled. Use debugReset() or debugClaim()');
+}
