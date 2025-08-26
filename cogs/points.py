@@ -80,7 +80,7 @@ class PointsCog(commands.Cog):
                     best_config = role_config
         
         return best_config
-
+    
     @commands.hybrid_command(name="daily", description="Claim your daily points with role bonuses")
     async def daily(self, ctx):
         try:
@@ -116,27 +116,27 @@ class PointsCog(commands.Cog):
                 elif isinstance(daily_claimed, str):
                     daily_claimed = datetime.fromisoformat(daily_claimed.replace('Z', '+00:00'))
                 
-                # Fixed daily reset logic - check if it's a new day
+                # 24-hour cooldown check (same as website)
                 now = datetime.now(timezone.utc)
-                last_claim_day = daily_claimed.replace(hour=0, minute=0, second=0, microsecond=0)
-                current_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+                time_since_claim = now - daily_claimed
+                cooldown_period = timedelta(hours=24)
                 
-                if current_day <= last_claim_day:
-                    # Calculate time until next daily (midnight UTC)
-                    tomorrow = current_day + timedelta(days=1)
-                    remaining = tomorrow - now
+                if time_since_claim < cooldown_period:
+                    # Still on cooldown
+                    remaining = cooldown_period - time_since_claim
                     hours = int(remaining.total_seconds() // 3600)
                     minutes = int((remaining.total_seconds() % 3600) // 60)
+                    next_claim_time = daily_claimed + cooldown_period
                     
                     embed = discord.Embed(
                         title="⏰ Daily Already Claimed!",
-                        description=f"You need to wait until the next day to claim again.",
+                        description=f"You need to wait 24 hours between claims.",
                         color=discord.Color.orange()
                     )
                     embed.add_field(name="Time Remaining", value=f"**{hours}h {minutes}m**", inline=True)
-                    embed.add_field(name="Next Claim", value=f"<t:{int(tomorrow.timestamp())}:R>", inline=True)
+                    embed.add_field(name="Next Claim", value=f"<t:{int(next_claim_time.timestamp())}:R>", inline=True)
                     embed.add_field(name="Last Claimed", value=f"<t:{int(daily_claimed.timestamp())}:R>", inline=True)
-                    embed.set_footer(text="Daily resets at midnight UTC!")
+                    embed.set_footer(text="Daily cooldown: 24 hours from last claim!")
                     
                     if is_interaction:
                         await ctx.interaction.followup.send(embed=embed)
@@ -173,7 +173,7 @@ class PointsCog(commands.Cog):
                 {
                     "$set": {
                         "daily_claimed": datetime.now(timezone.utc),
-                        "username": str(ctx.author)  # ← USERNAME UPDATE ADDED HERE
+                        "username": str(ctx.author)  # USERNAME UPDATE ADDED HERE
                     },
                     "$inc": {
                         "points": total_daily_points,
@@ -202,7 +202,7 @@ class PointsCog(commands.Cog):
             
             embed.add_field(name="💰 Total Reward", value=f"**{total_daily_points}** points", inline=False)
             embed.add_field(name="💳 New Balance", value=f"**{new_points}** points", inline=True)
-            embed.add_field(name="⏰ Next Daily", value="Available tomorrow at midnight UTC", inline=True)
+            embed.add_field(name="⏰ Next Daily", value="Available in 24 hours", inline=True)
             
             if role_name:
                 embed.set_footer(text=f"Claimed with {role_name} benefits • Total earned: {user_data['total_earned'] + total_daily_points} points")
@@ -308,27 +308,35 @@ class PointsCog(commands.Cog):
                     fav_text = "\n".join([f"{idx+1}. **{cookie}**: {count}" for idx, (cookie, count) in enumerate(top_cookies)])
                     embed.add_field(name="🍪 Favorite Cookies", value=fav_text, inline=False)
             
-            # Show daily claim status
+            # Show daily claim status with 24-hour cooldown
             if user_data.get("daily_claimed"):
                 daily_claimed = user_data["daily_claimed"]
                 if daily_claimed.tzinfo is None:
                     daily_claimed = daily_claimed.replace(tzinfo=timezone.utc)
                     
                 now = datetime.now(timezone.utc)
-                tomorrow = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+                time_since_claim = now - daily_claimed
+                cooldown_period = timedelta(hours=24)
                 
-                if daily_claimed.date() == now.date():
+                if time_since_claim < cooldown_period:
+                    next_claim_time = daily_claimed + cooldown_period
                     embed.add_field(
                         name="📅 Daily Status",
-                        value=f"✅ Claimed today\nNext: <t:{int(tomorrow.timestamp())}:R>",
+                        value=f"✅ Claimed\nNext: <t:{int(next_claim_time.timestamp())}:R>",
                         inline=True
                     )
                 else:
                     embed.add_field(
                         name="📅 Daily Status",
-                        value="❌ Not claimed today\nUse `/daily` now!",
+                        value="❌ Ready to claim\nUse `/daily` now!",
                         inline=True
                     )
+            else:
+                embed.add_field(
+                    name="📅 Daily Status",
+                    value="❌ Never claimed\nUse `/daily` now!",
+                    inline=True
+                )
             
             account_created = user_data.get('account_created', user_data.get('first_seen', datetime.now(timezone.utc)))
             if isinstance(account_created, datetime):
