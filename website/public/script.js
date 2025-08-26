@@ -83,6 +83,13 @@ function loadSavedData() {
         validateInput();
     }
     
+    // Load saved balance
+    const lastBalance = localStorage.getItem('lastBalance');
+    if (lastBalance && elements.balanceValue) {
+        elements.balanceBox.classList.remove('hidden');
+        elements.balanceValue.textContent = `${formatNumber(lastBalance)} points`;
+    }
+    
     // Load last claim time
     const lastClaim = localStorage.getItem('lastClaimTime');
     if (lastClaim) {
@@ -332,6 +339,10 @@ function handleClaimSuccess(data) {
     elements.claimButton.classList.add('success');
     elements.buttonText.textContent = '✓ Claimed Successfully!';
     
+    // Simple success bounce
+    elements.claimButton.style.animation = 'bounce 0.5s';
+    setTimeout(() => elements.claimButton.style.animation = '', 500);
+    
     // Show success message
     showAlert('success', `You received ${data.points} points! Balance: ${formatNumber(data.balance)} points`);
     
@@ -339,6 +350,7 @@ function handleClaimSuccess(data) {
     if (elements.balanceBox && elements.balanceValue) {
         elements.balanceBox.classList.remove('hidden');
         elements.balanceValue.textContent = `${formatNumber(data.balance)} points`;
+        localStorage.setItem('lastBalance', data.balance);
     }
     
     // Start cooldown
@@ -380,6 +392,7 @@ function handleClaimError(data, statusCode) {
         if (data.balance) {
             elements.balanceBox.classList.remove('hidden');
             elements.balanceValue.textContent = `${formatNumber(data.balance)} points`;
+            localStorage.setItem('lastBalance', data.balance);
         }
         if (data.nextClaim) {
             startCooldownTimer(new Date(data.nextClaim));

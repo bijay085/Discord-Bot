@@ -1010,3 +1010,11 @@ footer p {
         gap: var(--space-md);
     }
 }
+@keyframes bounce {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.1); }
+}
+
+.btn-primary.success {
+    background: linear-gradient(45deg, #10b981, #059669) !important;
+}
