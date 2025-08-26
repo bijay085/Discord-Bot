@@ -908,3 +908,48 @@ body::before {
 ::-webkit-scrollbar-thumb:hover {
     background: var(--bg-hover);
 }
+/* Add this to your styles.css file */
+
+/* Warning Box */
+.warning-box {
+    display: flex;
+    align-items: flex-start;
+    gap: 1rem;
+    padding: 1rem;
+    background: rgba(250, 166, 26, 0.1);
+    border: 1px solid #FAA61A;
+    border-left: 3px solid #FAA61A;
+    border-radius: var(--radius-md);
+    margin-bottom: 1.5rem;
+    animation: pulse 2s infinite;
+}
+
+.warning-icon {
+    font-size: 1.5rem;
+    flex-shrink: 0;
+}
+
+.warning-box div {
+    flex: 1;
+    color: var(--text-primary);
+    font-size: 0.9rem;
+    line-height: 1.5;
+}
+
+.warning-box strong {
+    color: #FAA61A;
+    display: block;
+    margin-bottom: 0.25rem;
+}
+
+/* Required/Optional Labels */
+.required {
+    color: #ED4245;
+    font-weight: 600;
+}
+
+.optional {
+    color: var(--text-muted);
+    font-size: 0.875rem;
+    font-weight: 400;
+}

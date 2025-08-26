@@ -45,7 +45,9 @@ function loadSavedData() {
 
 function saveData(userId, username) {
     localStorage.setItem('discordId', userId);
-    localStorage.setItem('username', username);
+    if (username) {
+        localStorage.setItem('username', username);
+    }
 }
 
 // Validation
@@ -54,7 +56,9 @@ function validateId(id) {
 }
 
 function validateName(name) {
-    return name && name.length >= 2 && name.length <= 32 && /^[a-zA-Z0-9_.-]+$/.test(name);
+    // Username is optional, so empty is valid
+    if (!name) return true;
+    return name.length >= 2 && name.length <= 32 && /^[a-zA-Z0-9_.-]+$/.test(name);
 }
 
 // Status Updates
@@ -169,21 +173,16 @@ async function handleClaim(e) {
         return;
     }
     
-    if (!AppState.isOnline) {
-        showToast('Bot is offline', 'error');
-        return;
-    }
-    
     const userId = document.getElementById('userId').value.trim();
-    const username = document.getElementById('username').value.trim();
+    const username = document.getElementById('username').value.trim() || 'Anonymous'; // Default if empty
     
     if (!validateId(userId)) {
-        showToast('Invalid Discord ID', 'error');
+        showToast('Invalid Discord ID format', 'error');
         return;
     }
     
     if (!validateName(username)) {
-        showToast('Invalid username', 'error');
+        showToast('Invalid username format', 'error');
         return;
     }
     
@@ -204,8 +203,7 @@ async function handleClaim(e) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 userId,
-                username,
-                timestamp: now
+                username
             })
         });
         

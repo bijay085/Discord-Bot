@@ -1,56 +1,14 @@
-// api/status.js - Secure Status Endpoint
+// api/status.js - Simple Status Endpoint
 import { MongoClient } from 'mongodb';
 
-// Rate limiting cache
-const rateLimit = new Map();
-const RATE_LIMIT_WINDOW = 60000; // 1 minute
-const MAX_REQUESTS = 30; // 30 requests per minute
-
 export default async function handler(req, res) {
-    // Enable CORS with restrictions
-    res.setHeader('Access-Control-Allow-Origin', process.env.ALLOWED_ORIGIN || '*');
+    // CORS header
+    res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET');
-    res.setHeader('Access-Control-Max-Age', '3600');
-    res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('X-Frame-Options', 'DENY');
-    res.setHeader('X-XSS-Protection', '1; mode=block');
     
     // Only allow GET
     if (req.method !== 'GET') {
         return res.status(405).json({ error: 'Method not allowed' });
-    }
-    
-    // Get client IP
-    const clientIp = req.headers['x-forwarded-for'] || 
-                    req.headers['x-real-ip'] || 
-                    req.connection.remoteAddress;
-    
-    // Rate limiting
-    const now = Date.now();
-    const userRateLimit = rateLimit.get(clientIp) || { count: 0, resetTime: now + RATE_LIMIT_WINDOW };
-    
-    if (now > userRateLimit.resetTime) {
-        userRateLimit.count = 0;
-        userRateLimit.resetTime = now + RATE_LIMIT_WINDOW;
-    }
-    
-    userRateLimit.count++;
-    rateLimit.set(clientIp, userRateLimit);
-    
-    if (userRateLimit.count > MAX_REQUESTS) {
-        return res.status(429).json({ 
-            error: 'Too many requests',
-            retryAfter: Math.ceil((userRateLimit.resetTime - now) / 1000)
-        });
-    }
-    
-    // Clean up old rate limit entries
-    if (rateLimit.size > 1000) {
-        for (const [ip, data] of rateLimit.entries()) {
-            if (now > data.resetTime) {
-                rateLimit.delete(ip);
-            }
-        }
     }
     
     let client;
@@ -75,17 +33,20 @@ export default async function handler(req, res) {
         const isOnline = lastActivity && 
             (new Date() - new Date(lastActivity)) < (5 * 60 * 1000);
         
-        // Get basic statistics (minimal data)
+        // Get basic statistics
         const [totalUsers, totalServers, globalStats] = await Promise.all([
             db.collection('users').countDocuments({}),
             db.collection('servers').countDocuments({ enabled: true }),
             db.collection('statistics').findOne(
                 { _id: 'global_stats' },
-                { projection: { all_time_claims: 1 } }
+                { projection: { 
+                    all_time_claims: 1,
+                    total_points_distributed: 1 
+                } }
             )
         ]);
         
-        // Get top 10 users for leaderboard (no sensitive data)
+        // Get top 10 users for leaderboard
         const leaderboard = await db.collection('users')
             .find(
                 { blacklisted: { $ne: true } },
@@ -101,27 +62,35 @@ export default async function handler(req, res) {
             .limit(10)
             .toArray();
         
-        // Clean usernames for security
+        // Format leaderboard
         const cleanLeaderboard = leaderboard.map((user, index) => ({
             rank: index + 1,
-            username: user.username ? 
-                user.username.substring(0, 20).replace(/[^a-zA-Z0-9_.-]/g, '') : 
-                'Anonymous',
-            points: Math.floor(user.points || 0)
+            username: user.username || 'Anonymous',
+            points: user.points || 0
         }));
         
-        // Response data (minimal, no sensitive info)
+        // Get active users today (optional - can remove if not needed)
+        const todayStart = new Date();
+        todayStart.setHours(0, 0, 0, 0);
+        
+        const activeToday = await db.collection('users').countDocuments({
+            last_active: { $gte: todayStart }
+        });
+        
+        // Response data
         const responseData = {
             online: isOnline && !config?.maintenance_mode,
             totalUsers: totalUsers || 0,
             totalServers: totalServers || 0,
+            totalPoints: globalStats?.total_points_distributed || 0,
             totalCookies: globalStats?.all_time_claims || 0,
+            activeToday: activeToday || 0,
             lastActivity: isOnline ? lastActivity : null,
             leaderboard: cleanLeaderboard,
             timestamp: new Date().toISOString()
         };
         
-        // Cache headers
+        // Simple cache header
         res.setHeader('Cache-Control', 'public, max-age=30');
         
         return res.status(200).json(responseData);
@@ -129,7 +98,6 @@ export default async function handler(req, res) {
     } catch (error) {
         console.error('Status endpoint error:', error.message);
         
-        // Don't expose internal errors
         return res.status(500).json({ 
             error: 'Service temporarily unavailable',
             online: false

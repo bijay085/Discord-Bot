@@ -5,11 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Cookie Bot - Premium Discord Bot</title>
     <meta name="description" content="Cookie Bot - Your premium Discord cookie distribution system with points, games, and rewards!">
-    <meta name="keywords" content="discord bot, cookie bot, points system, daily rewards">
-    <meta property="og:title" content="Cookie Bot Dashboard">
-    <meta property="og:description" content="Check bot status and claim your daily points!">
-    <meta property="og:type" content="website">
-    <meta name="robots" content="index, follow">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍪</text></svg>">
     <link rel="stylesheet" href="styles.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -17,10 +12,6 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 </head>
 <body>
-    <!-- Anti-bot honeypot fields (hidden) -->
-    <input type="text" id="hp_name" style="display:none" tabindex="-1" autocomplete="off">
-    <input type="email" id="hp_email" style="display:none" tabindex="-1" autocomplete="off">
-    
     <!-- Loading Screen -->
     <div id="loadingScreen" class="loading-screen">
         <div class="loading-content">
@@ -98,10 +89,20 @@
                     <small>💡 Join our Discord server for role bonuses up to 20+ points!</small>
                 </div>
 
+                <!-- Important Warning -->
+                <div class="warning-box">
+                    <span class="warning-icon">⚠️</span>
+                    <div>
+                        <strong>IMPORTANT:</strong> Make sure the Discord ID is YOUR OWN! 
+                        If you enter the wrong ID, points will be added to that account and you'll get the cooldown. 
+                        We are NOT responsible for wrong ID entries.
+                    </div>
+                </div>
+
                 <form id="claimForm" class="claim-form">
                     <div class="input-group">
                         <div class="input-wrapper">
-                            <label for="userId">Discord User ID</label>
+                            <label for="userId">Discord User ID <span class="required">*</span></label>
                             <input 
                                 type="text" 
                                 id="userId" 
@@ -112,10 +113,10 @@
                                 required
                                 autocomplete="off"
                             >
-                            <small class="input-hint">Your 18-digit Discord ID</small>
+                            <small class="input-hint">Your 18-digit Discord ID (DOUBLE CHECK THIS!)</small>
                         </div>
                         <div class="input-wrapper">
-                            <label for="username">Username</label>
+                            <label for="username">Username <span class="optional">(Optional)</span></label>
                             <input 
                                 type="text" 
                                 id="username" 
@@ -123,26 +124,9 @@
                                 placeholder="e.g., CookieLover" 
                                 maxlength="32"
                                 minlength="2"
-                                required
                                 autocomplete="off"
                             >
-                            <small class="input-hint">Your Discord username</small>
-                        </div>
-                    </div>
-
-                    <!-- Hidden timestamp for anti-bot -->
-                    <input type="hidden" id="formTimestamp" name="timestamp">
-                    
-                    <!-- Captcha placeholder -->
-                    <div id="captchaContainer" class="captcha-container" style="display: none;">
-                        <div class="simple-captcha">
-                            <span id="captchaQuestion"></span>
-                            <input 
-                                type="text" 
-                                id="captchaAnswer" 
-                                placeholder="Answer"
-                                autocomplete="off"
-                            >
+                            <small class="input-hint">Your Discord username (for display)</small>
                         </div>
                     </div>
 
@@ -214,12 +198,6 @@
     <!-- Toast Container -->
     <div id="toastContainer" class="toast-container"></div>
 
-    <!-- Anti-bot Protection -->
-    <script>
-        // Basic anti-bot protection
-        window._startTime = Date.now();
-        window._interactions = 0;
-    </script>
     <script src="script.js"></script>
 </body>
 </html>

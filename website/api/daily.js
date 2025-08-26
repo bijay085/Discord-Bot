@@ -1,202 +1,86 @@
-// api/daily.js - Secure Daily Claim Endpoint with Anti-Bot Protection
+// api/daily.js - Simple Daily Claim Endpoint
 import { MongoClient } from 'mongodb';
-import crypto from 'crypto';
 
-// Security configurations
-const RATE_LIMIT_WINDOW = 60000; // 1 minute
-const MAX_ATTEMPTS = 3; // Max attempts per window
+// Configuration
 const CLAIM_COOLDOWN = 86400000; // 24 hours
 const MIN_REQUEST_INTERVAL = 2000; // 2 seconds between requests
 
-// Rate limiting and anti-bot tracking
-const rateLimitMap = new Map();
-const suspiciousIPs = new Set();
-const claimHistory = new Map();
-
-// Security utilities
-function hashIP(ip) {
-    return crypto.createHash('sha256').update(ip + process.env.SALT || 'default').digest('hex');
-}
-
-function isValidDiscordId(id) {
-    return /^[0-9]{17,20}$/.test(id);
-}
-
-function isValidUsername(username) {
-    return username && 
-           username.length >= 2 && 
-           username.length <= 32 && 
-           /^[a-zA-Z0-9_.-]+$/.test(username);
-}
-
-function detectBot(headers, body) {
-    // Check for common bot indicators
-    const userAgent = headers['user-agent'] || '';
-    const botPatterns = [
-        /bot/i, /crawl/i, /spider/i, /scraper/i, /curl/i, /wget/i, /python/i, /java/i
-    ];
-    
-    if (botPatterns.some(pattern => pattern.test(userAgent))) {
-        return true;
-    }
-    
-    // Check for missing headers that real browsers send
-    if (!headers['accept-language'] || !headers['accept-encoding']) {
-        return true;
-    }
-    
-    // Check for suspicious timing patterns
-    if (body.timestamp) {
-        const requestTime = parseInt(body.timestamp);
-        const serverTime = Date.now();
-        const timeDiff = Math.abs(serverTime - requestTime);
-        
-        // If time difference is more than 5 minutes, likely automated
-        if (timeDiff > 300000) {
-            return true;
-        }
-    }
-    
-    return false;
-}
+// Simple rate limiting
+const lastRequestTime = new Map();
 
 export default async function handler(req, res) {
-    // Security headers
-    res.setHeader('Access-Control-Allow-Origin', process.env.ALLOWED_ORIGIN || '*');
+    // CORS headers
+    res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'POST');
-    res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('X-Frame-Options', 'DENY');
-    res.setHeader('X-XSS-Protection', '1; mode=block');
-    res.setHeader('Content-Security-Policy', "default-src 'none'");
     
     // Only allow POST
     if (req.method !== 'POST') {
         return res.status(405).json({ error: 'Method not allowed' });
     }
     
-    // Get client information
+    // Get client IP
     const clientIp = req.headers['x-forwarded-for']?.split(',')[0] || 
                     req.headers['x-real-ip'] || 
                     req.connection.remoteAddress;
     
-    const ipHash = hashIP(clientIp);
-    
-    // Check if IP is already flagged as suspicious
-    if (suspiciousIPs.has(ipHash)) {
-        return res.status(403).json({ error: 'Access denied' });
-    }
-    
-    // Bot detection
-    if (detectBot(req.headers, req.body)) {
-        suspiciousIPs.add(ipHash);
-        return res.status(403).json({ error: 'Automated requests not allowed' });
-    }
-    
-    // Rate limiting
+    // Simple rate limiting - prevent rapid requests
     const now = Date.now();
-    const userRateLimit = rateLimitMap.get(ipHash) || { 
-        count: 0, 
-        resetTime: now + RATE_LIMIT_WINDOW,
-        lastRequest: 0 
-    };
+    const lastRequest = lastRequestTime.get(clientIp) || 0;
     
-    // Check minimum interval between requests
-    if (now - userRateLimit.lastRequest < MIN_REQUEST_INTERVAL) {
+    if (now - lastRequest < MIN_REQUEST_INTERVAL) {
         return res.status(429).json({ 
-            error: 'Too fast! Please wait a moment',
+            error: 'Too fast! Please wait a moment.',
             retryAfter: 2
         });
     }
     
-    // Reset rate limit window if expired
-    if (now > userRateLimit.resetTime) {
-        userRateLimit.count = 0;
-        userRateLimit.resetTime = now + RATE_LIMIT_WINDOW;
-    }
+    lastRequestTime.set(clientIp, now);
     
-    userRateLimit.count++;
-    userRateLimit.lastRequest = now;
-    rateLimitMap.set(ipHash, userRateLimit);
-    
-    // Check rate limit
-    if (userRateLimit.count > MAX_ATTEMPTS) {
-        const timeLeft = Math.ceil((userRateLimit.resetTime - now) / 1000);
-        return res.status(429).json({ 
-            error: 'Too many attempts. Please try again later',
-            retryAfter: timeLeft
-        });
-    }
-    
-    // Clean up old rate limit entries periodically
-    if (rateLimitMap.size > 1000) {
-        for (const [hash, data] of rateLimitMap.entries()) {
-            if (now > data.resetTime + RATE_LIMIT_WINDOW) {
-                rateLimitMap.delete(hash);
+    // Clean up old entries (keep map size manageable)
+    if (lastRequestTime.size > 1000) {
+        const cutoff = now - 60000; // Remove entries older than 1 minute
+        for (const [ip, time] of lastRequestTime.entries()) {
+            if (time < cutoff) {
+                lastRequestTime.delete(ip);
             }
         }
     }
     
     // Validate request body
-    const { userId, username, sessionToken } = req.body;
+    const { userId, username } = req.body;
     
     if (!userId || !username) {
         return res.status(400).json({ error: 'Missing required fields' });
     }
     
-    // Validate Discord ID
-    if (!isValidDiscordId(userId)) {
-        suspiciousIPs.add(ipHash);
+    // Basic validation
+    if (!/^[0-9]{17,20}$/.test(userId)) {
         return res.status(400).json({ error: 'Invalid Discord ID format' });
     }
     
-    // Validate username
-    if (!isValidUsername(username)) {
-        return res.status(400).json({ error: 'Invalid username format' });
-    }
-    
-    // Check session token (basic validation)
-    if (!sessionToken || sessionToken.length < 32) {
-        return res.status(400).json({ error: 'Invalid session' });
-    }
-    
-    // Check claim history for this IP
-    const lastClaim = claimHistory.get(ipHash);
-    if (lastClaim && (now - lastClaim.timestamp < 60000)) {
-        // Same IP claiming within 1 minute - suspicious
-        if (lastClaim.userId !== userId) {
-            suspiciousIPs.add(ipHash);
-            return res.status(403).json({ error: 'Suspicious activity detected' });
-        }
+    if (username.length < 2 || username.length > 32) {
+        return res.status(400).json({ error: 'Invalid username length' });
     }
     
     let client;
     
     try {
-        // Connect to MongoDB with timeout
+        // Connect to MongoDB
         client = new MongoClient(process.env.MONGODB_URI, {
             maxPoolSize: 10,
-            serverSelectionTimeoutMS: 5000,
-            connectTimeoutMS: 5000
+            serverSelectionTimeoutMS: 5000
         });
         
         await client.connect();
         const db = client.db(process.env.DATABASE_NAME || 'discord_bot');
         
-        // Check bot status
+        // Get bot config (but don't block claims if bot is offline)
         const config = await db.collection('config').findOne({ _id: 'bot_config' });
-        const lastActivity = config?.last_activity;
-        const isOnline = lastActivity && 
-            (new Date() - new Date(lastActivity)) < (5 * 60 * 1000);
         
-        if (!isOnline) {
-            return res.status(503).json({ 
-                error: 'Bot is offline! Please wait for bot to come online.' 
-            });
-        }
-        
+        // Check if maintenance mode (this is the only blocking condition)
         if (config?.maintenance_mode) {
             return res.status(503).json({ 
-                error: 'Bot is under maintenance. Please try again later.' 
+                error: 'System is under maintenance. Please try again later.' 
             });
         }
         
@@ -214,23 +98,15 @@ export default async function handler(req, res) {
             // Create new user
             user = {
                 user_id: userIdNum,
-                username: username.substring(0, 32),
+                username: username,
                 points: 0,
                 total_earned: 0,
                 total_spent: 0,
-                trust_score: 50,
-                cookie_claims: {},
-                total_claims: 0,
-                weekly_claims: 0,
                 daily_claimed: null,
-                invite_count: 0,
                 blacklisted: false,
-                blacklist_expires: null,
                 account_created: new Date(),
-                first_seen: new Date(),
                 last_active: new Date(),
-                created_via: 'website',
-                ip_hash: ipHash // Store hashed IP for security tracking
+                created_via: 'website'
             };
             
             await db.collection('users').insertOne(user);
@@ -238,19 +114,9 @@ export default async function handler(req, res) {
         
         // Check if blacklisted
         if (user.blacklisted) {
-            if (user.blacklist_expires && new Date(user.blacklist_expires) > new Date()) {
-                const timeLeft = new Date(user.blacklist_expires) - new Date();
-                const daysLeft = Math.floor(timeLeft / (1000 * 60 * 60 * 24));
-                
-                return res.status(403).json({ 
-                    error: `You are blacklisted for ${daysLeft} more days!`,
-                    blacklist_expires: user.blacklist_expires
-                });
-            } else if (!user.blacklist_expires) {
-                return res.status(403).json({ 
-                    error: 'You are permanently blacklisted!'
-                });
-            }
+            return res.status(403).json({ 
+                error: 'Your account has been blacklisted.' 
+            });
         }
         
         // Check cooldown
@@ -272,31 +138,30 @@ export default async function handler(req, res) {
             }
         }
         
-        // Award points (base only - no role bonuses for web)
+        // Award points
         const totalPoints = basePoints;
         
-        // Update user
-        const updateResult = await db.collection('users').updateOne(
-            { user_id: userIdNum },
-            {
-                $set: {
-                    daily_claimed: new Date(),
-                    last_active: new Date(),
-                    username: username.substring(0, 32),
-                    last_claim_ip: ipHash
-                },
-                $inc: {
-                    points: totalPoints,
-                    total_earned: totalPoints
-                }
+        // Update user (only update username if provided and not "Anonymous")
+        const updateData = {
+            $set: {
+                daily_claimed: new Date(),
+                last_active: new Date()
+            },
+            $inc: {
+                points: totalPoints,
+                total_earned: totalPoints
             }
-        );
+        };
         
-        if (updateResult.matchedCount === 0) {
-            return res.status(500).json({ 
-                error: 'Failed to update user data. Please try again.' 
-            });
+        // Only update username if it's not "Anonymous" (meaning user actually entered something)
+        if (username && username !== 'Anonymous') {
+            updateData.$set.username = username;
         }
+        
+        await db.collection('users').updateOne(
+            { user_id: userIdNum },
+            updateData
+        );
         
         // Log transaction
         await db.collection('transactions').insertOne({
@@ -305,20 +170,10 @@ export default async function handler(req, res) {
             amount: totalPoints,
             description: `Daily claim (web) - ${totalPoints} points`,
             timestamp: new Date(),
-            source: 'website',
-            ip_hash: ipHash
-        });
-        
-        // Update analytics
-        await db.collection('analytics').insertOne({
-            type: 'command_usage',
-            command: 'daily',
-            user_id: userIdNum,
-            timestamp: new Date(),
             source: 'website'
         });
         
-        // Update global statistics
+        // Update statistics
         await db.collection('statistics').updateOne(
             { _id: 'global_stats' },
             {
@@ -333,21 +188,6 @@ export default async function handler(req, res) {
             { upsert: true }
         );
         
-        // Track successful claim
-        claimHistory.set(ipHash, {
-            userId: userIdNum,
-            timestamp: now
-        });
-        
-        // Clean up claim history
-        if (claimHistory.size > 500) {
-            for (const [hash, data] of claimHistory.entries()) {
-                if (now - data.timestamp > 3600000) { // 1 hour old
-                    claimHistory.delete(hash);
-                }
-            }
-        }
-        
         // Success response
         return res.status(200).json({
             success: true,
@@ -360,22 +200,6 @@ export default async function handler(req, res) {
         
     } catch (error) {
         console.error('Daily claim error:', error.message);
-        
-        // Log error without exposing details
-        try {
-            if (client && client.db) {
-                await client.db(process.env.DATABASE_NAME || 'discord_bot')
-                    .collection('error_logs')
-                    .insertOne({
-                        type: 'daily_claim_error',
-                        error: error.message,
-                        timestamp: new Date(),
-                        ip_hash: ipHash
-                    });
-            }
-        } catch (logError) {
-            // Silent fail for logging
-        }
         
         return res.status(500).json({ 
             error: 'Service temporarily unavailable. Please try again later.'
