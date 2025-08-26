@@ -80,7 +80,7 @@ class PointsCog(commands.Cog):
                     best_config = role_config
         
         return best_config
-    
+
     @commands.hybrid_command(name="daily", description="Claim your daily points with role bonuses")
     async def daily(self, ctx):
         try:
@@ -167,11 +167,14 @@ class PointsCog(commands.Cog):
             else:
                 bonus_from_trust = 0
             
-            # Update user data
+            # Update user data WITH USERNAME UPDATE
             await self.db.users.update_one(
                 {"user_id": ctx.author.id},
                 {
-                    "$set": {"daily_claimed": datetime.now(timezone.utc)},
+                    "$set": {
+                        "daily_claimed": datetime.now(timezone.utc),
+                        "username": str(ctx.author)  # ← USERNAME UPDATE ADDED HERE
+                    },
                     "$inc": {
                         "points": total_daily_points,
                         "total_earned": total_daily_points

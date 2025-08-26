@@ -1,4 +1,4 @@
-// api/status.js - Optimized Status Endpoint
+// api/status.js - Fixed Status Endpoint with Proper Stats
 import { MongoClient } from 'mongodb';
 
 // Cache for status data
@@ -27,29 +27,51 @@ export default async function handler(req, res) {
     try {
         client = new MongoClient(process.env.MONGODB_URI, {
             maxPoolSize: 5,
-            serverSelectionTimeoutMS: 3000,
-            socketTimeoutMS: 3000
+            serverSelectionTimeoutMS: 3000
         });
         
         await client.connect();
         const db = client.db(process.env.DATABASE_NAME || 'discord_bot');
         
+        // Calculate stats directly from collections
+        const todayStart = new Date();
+        todayStart.setHours(0, 0, 0, 0);
+        
         // Parallel fetch all data
-        const [config, stats, leaderboard] = await Promise.all([
+        const [
+            userCount,
+            activeToday,
+            totalPointsResult,
+            totalClaimsResult,
+            config,
+            leaderboard,
+            stats
+        ] = await Promise.all([
+            // Count total users
+            db.collection('users').countDocuments({}),
+            
+            // Count active users today
+            db.collection('users').countDocuments({
+                last_active: { $gte: todayStart }
+            }),
+            
+            // Sum total points earned
+            db.collection('users').aggregate([
+                { $group: { _id: null, total: { $sum: "$total_earned" } } }
+            ]).toArray(),
+            
+            // Count total claims from transactions
+            db.collection('transactions').countDocuments({
+                type: 'daily_claim'
+            }),
+            
+            // Get bot config
             db.collection('config').findOne(
                 { _id: 'bot_config' },
                 { projection: { last_activity: 1, maintenance_mode: 1 } }
             ),
-            db.collection('statistics').findOne(
-                { _id: 'global_stats' },
-                { projection: { 
-                    all_time_claims: 1,
-                    total_points_distributed: 1,
-                    total_users: 1,
-                    total_servers: 1,
-                    active_today: 1
-                }}
-            ),
+            
+            // Get leaderboard
             db.collection('users')
                 .find(
                     { blacklisted: { $ne: true } },
@@ -57,23 +79,49 @@ export default async function handler(req, res) {
                 )
                 .sort({ points: -1 })
                 .limit(10)
-                .toArray()
+                .toArray(),
+            
+            // Get existing stats (if any)
+            db.collection('statistics').findOne({ _id: 'global_stats' })
         ]);
+        
+        // Calculate total points (fallback to stats if aggregation fails)
+        const totalPoints = totalPointsResult?.[0]?.total || 
+                          stats?.total_points_distributed || 0;
+        
+        // Use calculated claims or fallback to stats
+        const totalClaims = totalClaimsResult || 
+                          stats?.all_time_claims || 0;
         
         // Check bot status
         const lastActivity = config?.last_activity;
         const isOnline = lastActivity && 
             (now - new Date(lastActivity).getTime()) < 300000; // 5 minutes
         
+        // Update statistics collection with current counts
+        await db.collection('statistics').updateOne(
+            { _id: 'global_stats' },
+            {
+                $set: {
+                    total_users: userCount,
+                    active_today: activeToday,
+                    total_points_distributed: totalPoints,
+                    all_time_claims: totalClaims,
+                    last_updated: new Date()
+                }
+            },
+            { upsert: true }
+        );
+        
         // Format response
         const responseData = {
             online: isOnline && !config?.maintenance_mode,
             stats: {
-                users: stats?.total_users || 0,
+                users: userCount || 0,
                 servers: stats?.total_servers || 0,
-                points: stats?.total_points_distributed || 0,
-                cookies: stats?.all_time_claims || 0,
-                active: stats?.active_today || 0
+                points: totalPoints || 0,
+                cookies: totalClaims || 0,
+                active: activeToday || 0
             },
             leaderboard: leaderboard.map((user, i) => ({
                 rank: i + 1,
@@ -90,7 +138,7 @@ export default async function handler(req, res) {
         return res.status(200).json(responseData);
         
     } catch (error) {
-        console.error('Status error:', error.message);
+        console.error('Status error:', error);
         
         // Return minimal response on error
         return res.status(200).json({
