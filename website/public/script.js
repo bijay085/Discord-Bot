@@ -474,3 +474,292 @@ function escapeHtml(text) {
     div.textContent = text;
     return div.innerHTML;
 }
+// Add this JavaScript to your script.js file or in a <script> tag
+
+// Slider functionality for Premium Services with TRUE INFINITE SCROLL
+function initServiceSlider() {
+    // Get slider elements
+    const sliderWrapper = document.querySelector('.services-slider-wrapper');
+    const servicesGrid = document.querySelector('.services-grid');
+    const originalCards = Array.from(document.querySelectorAll('.service-card'));
+    
+    // Check if elements exist
+    if (!servicesGrid || originalCards.length === 0) {
+        console.log('Slider elements not found');
+        return;
+    }
+    
+    // Configuration
+    const slideWidth = 100; // percentage
+    const totalSlides = originalCards.length;
+    let currentPosition = 0;
+    let isAnimating = false;
+    
+    // Clone management
+    const clonesPerSide = 2; // Number of full sets to clone on each side
+    
+    function setupInfiniteSlides() {
+        servicesGrid.innerHTML = '';
+        
+        // Add multiple sets of clones at the beginning
+        for (let set = 0; set < clonesPerSide; set++) {
+            originalCards.forEach(card => {
+                const clone = card.cloneNode(true);
+                clone.classList.add('clone-before');
+                servicesGrid.appendChild(clone);
+            });
+        }
+        
+        // Add original slides
+        originalCards.forEach(card => {
+            servicesGrid.appendChild(card);
+        });
+        
+        // Add multiple sets of clones at the end
+        for (let set = 0; set < clonesPerSide; set++) {
+            originalCards.forEach(card => {
+                const clone = card.cloneNode(true);
+                clone.classList.add('clone-after');
+                servicesGrid.appendChild(clone);
+            });
+        }
+        
+        // Set initial position (start at first original slide)
+        currentPosition = -(clonesPerSide * totalSlides * slideWidth);
+        servicesGrid.style.transform = `translateX(${currentPosition}%)`;
+        servicesGrid.style.transition = 'none';
+    }
+    
+    setupInfiniteSlides();
+    
+    // Create navigation elements
+    createNavigationElements();
+    
+    function createNavigationElements() {
+        // Create arrows if they don't exist
+        let prevButton = document.querySelector('.slider-arrow.prev');
+        let nextButton = document.querySelector('.slider-arrow.next');
+        
+        if (!prevButton) {
+            prevButton = document.createElement('button');
+            prevButton.className = 'slider-arrow prev';
+            prevButton.innerHTML = '←';
+            sliderWrapper.appendChild(prevButton);
+        }
+        
+        if (!nextButton) {
+            nextButton = document.createElement('button');
+            nextButton.className = 'slider-arrow next';
+            nextButton.innerHTML = '→';
+            sliderWrapper.appendChild(nextButton);
+        }
+        
+        // Create dots
+        let dotsContainer = document.querySelector('.slider-dots');
+        if (!dotsContainer) {
+            dotsContainer = document.createElement('div');
+            dotsContainer.className = 'slider-dots';
+            
+            for (let i = 0; i < totalSlides; i++) {
+                const dot = document.createElement('button');
+                dot.className = 'slider-dot';
+                if (i === 0) dot.classList.add('active');
+                dot.onclick = () => goToSlide(i);
+                dotsContainer.appendChild(dot);
+            }
+            
+            sliderWrapper.parentNode.insertBefore(dotsContainer, sliderWrapper.nextSibling);
+        }
+        
+        // Event listeners
+        prevButton.onclick = () => move('prev');
+        nextButton.onclick = () => move('next');
+    }
+    
+    function move(direction) {
+        if (isAnimating) return;
+        isAnimating = true;
+        
+        // Calculate movement
+        const moveAmount = direction === 'next' ? -slideWidth : slideWidth;
+        currentPosition += moveAmount;
+        
+        // Update dots IMMEDIATELY when animation starts
+        updateDots();
+        
+        // Animate the movement with faster transition
+        servicesGrid.style.transition = 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)';
+        servicesGrid.style.transform = `translateX(${currentPosition}%)`;
+        
+        // Check boundaries and reset if needed
+        setTimeout(() => {
+            const totalWidth = totalSlides * slideWidth;
+            const resetThreshold = clonesPerSide * totalWidth;
+            
+            if (currentPosition <= -(resetThreshold + totalWidth)) {
+                // Moved too far right, reset to left side
+                servicesGrid.style.transition = 'none';
+                currentPosition += totalWidth;
+                servicesGrid.style.transform = `translateX(${currentPosition}%)`;
+            } else if (currentPosition >= -resetThreshold + totalWidth) {
+                // Moved too far left, reset to right side
+                servicesGrid.style.transition = 'none';
+                currentPosition -= totalWidth;
+                servicesGrid.style.transform = `translateX(${currentPosition}%)`;
+            }
+            
+            isAnimating = false;
+        }, 300);
+    }
+    
+    function goToSlide(index) {
+        if (isAnimating) return;
+        isAnimating = true;
+        
+        // Calculate the position for this slide
+        const targetPosition = -(clonesPerSide * totalSlides * slideWidth + index * slideWidth);
+        
+        // Update dots IMMEDIATELY
+        const dots = document.querySelectorAll('.slider-dot');
+        dots.forEach((dot, i) => {
+            dot.classList.toggle('active', i === index);
+        });
+        
+        servicesGrid.style.transition = 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)';
+        currentPosition = targetPosition;
+        servicesGrid.style.transform = `translateX(${currentPosition}%)`;
+        
+        setTimeout(() => {
+            isAnimating = false;
+        }, 300);
+    }
+    
+    function updateDots() {
+        const dots = document.querySelectorAll('.slider-dot');
+        const normalizedPosition = Math.abs(currentPosition + (clonesPerSide * totalSlides * slideWidth));
+        const currentSlideIndex = Math.round(normalizedPosition / slideWidth) % totalSlides;
+        
+        dots.forEach((dot, index) => {
+            dot.classList.toggle('active', index === currentSlideIndex);
+        });
+    }
+    
+    // Touch support with momentum
+    let startX = 0;
+    let currentX = 0;
+    let isDragging = false;
+    let startTime = 0;
+    let velocity = 0;
+    
+    function handleStart(clientX) {
+        if (isAnimating) return;
+        isDragging = true;
+        startX = clientX;
+        currentX = clientX;
+        startTime = Date.now();
+        velocity = 0;
+        servicesGrid.style.transition = 'none';
+    }
+    
+    function handleMove(clientX) {
+        if (!isDragging || isAnimating) return;
+        
+        const deltaX = clientX - currentX;
+        const deltaTime = Date.now() - startTime;
+        
+        if (deltaTime > 0) {
+            velocity = deltaX / deltaTime;
+        }
+        
+        currentX = clientX;
+        startTime = Date.now();
+        
+        const diff = clientX - startX;
+        const movePercent = (diff / window.innerWidth) * 100;
+        servicesGrid.style.transform = `translateX(${currentPosition + movePercent}%)`;
+    }
+    
+    function handleEnd(clientX) {
+        if (!isDragging || isAnimating) return;
+        isDragging = false;
+        
+        const diff = clientX - startX;
+        const threshold = window.innerWidth * 0.2; // 20% of screen width
+        const momentumThreshold = 0.5;
+        
+        // Check velocity for momentum scrolling
+        if (Math.abs(velocity) > momentumThreshold) {
+            move(velocity > 0 ? 'prev' : 'next');
+        } else if (Math.abs(diff) > threshold) {
+            move(diff > 0 ? 'prev' : 'next');
+        } else {
+            // Snap back with faster animation
+            servicesGrid.style.transition = 'transform 0.2s ease-out';
+            servicesGrid.style.transform = `translateX(${currentPosition}%)`;
+        }
+        
+        velocity = 0;
+    }
+    
+    // Touch events
+    servicesGrid.addEventListener('touchstart', e => handleStart(e.touches[0].clientX));
+    servicesGrid.addEventListener('touchmove', e => handleMove(e.touches[0].clientX));
+    servicesGrid.addEventListener('touchend', e => handleEnd(e.changedTouches[0].clientX));
+    
+    // Mouse events
+    servicesGrid.addEventListener('mousedown', e => {
+        e.preventDefault();
+        handleStart(e.clientX);
+    });
+    
+    document.addEventListener('mousemove', e => {
+        if (isDragging) {
+            e.preventDefault();
+            handleMove(e.clientX);
+        }
+    });
+    
+    document.addEventListener('mouseup', e => {
+        if (isDragging) {
+            handleEnd(e.clientX);
+        }
+    });
+    
+    // Keyboard
+    document.addEventListener('keydown', e => {
+        if (e.key === 'ArrowLeft') move('prev');
+        if (e.key === 'ArrowRight') move('next');
+    });
+    
+    // Auto-play
+    let autoplayInterval;
+    
+    function startAutoplay(delay = 3000) {
+        stopAutoplay();
+        autoplayInterval = setInterval(() => move('next'), delay);
+    }
+    
+    function stopAutoplay() {
+        if (autoplayInterval) {
+            clearInterval(autoplayInterval);
+            autoplayInterval = null;
+        }
+    }
+    
+    // Optional: Enable autoplay
+    // startAutoplay(3000);
+    
+    // Stop on hover
+    servicesGrid.addEventListener('mouseenter', stopAutoplay);
+    servicesGrid.addEventListener('touchstart', stopAutoplay);
+    
+    // Initialize
+    updateDots();
+}
+
+// Initialize when ready
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initServiceSlider);
+} else {
+    initServiceSlider();
+}
