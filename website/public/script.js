@@ -259,7 +259,7 @@ function updateLeaderboard(leaderboard) {
     }
     
     elements.leaderboard.innerHTML = leaderboard
-        .slice(0, 10)
+        .slice(0, 7)
         .map((user, index) => {
             const rankClass = index === 0 ? 'gold' : index === 1 ? 'silver' : index === 2 ? 'bronze' : '';
             const rankDisplay = index < 3 ? ['🥇', '🥈', '🥉'][index] : `${index + 1}`;
