@@ -1,4 +1,4 @@
-// Bubble Bot - Complete JavaScript with Clear Feedback System
+// Bubble Bot - Clean UI Feedback (No Alerts)
 // Simple, clean, no duplicate messages
 
 // ============================================
@@ -22,7 +22,7 @@ const state = {
     cooldownTimer: null,
     updateInterval: null,
     lastClaimTime: 0,
-    isProcessing: false // Prevent double clicks
+    isProcessing: false
 };
 
 // ============================================
@@ -62,7 +62,7 @@ function cacheElements() {
     elements.spinner = document.getElementById('spinner');
     elements.charCount = document.getElementById('charCount');
     
-    // Feedback
+    // UI Feedback (no alerts)
     elements.alertBox = document.getElementById('alertBox');
     elements.timerBox = document.getElementById('timerBox');
     elements.timerValue = document.getElementById('timerValue');
@@ -96,9 +96,12 @@ function loadSavedData() {
     if (lastClaim) {
         state.lastClaimTime = parseInt(lastClaim);
         checkCooldown();
-    } else {
-        // Show initial help message only if no cooldown
-        showAlert('info', 'Enter your Discord ID to claim 2 points daily. Use our discord bubble bot to get points on the basis of role !');
+    }
+    
+    // Hide info box after loading
+    if (elements.alertBox && !lastClaim) {
+        // Keep info box visible only for first-time users
+        elements.alertBox.classList.remove('hidden');
     }
 }
 
@@ -300,9 +303,8 @@ async function handleClaim(e) {
     
     // Validate input
     if (!validateInput()) {
-        showAlert('error', `Discord ID must be ${CONFIG.MIN_ID_LENGTH}-${CONFIG.MAX_ID_LENGTH} digits.`);
+        // Just shake the input, no alert
         elements.userId.focus();
-        // Shake the input field
         elements.userId.style.animation = 'errorShake 0.5s';
         setTimeout(() => elements.userId.style.animation = '', 500);
         return;
@@ -316,7 +318,11 @@ async function handleClaim(e) {
     // Set processing state
     state.isProcessing = true;
     setLoadingState(true);
-    hideAlerts();
+    
+    // Hide info box when claiming
+    if (elements.alertBox) {
+        elements.alertBox.classList.add('hidden');
+    }
     
     try {
         const response = await fetch(`${CONFIG.API_BASE}/daily`, {
@@ -337,7 +343,6 @@ async function handleClaim(e) {
         
     } catch (error) {
         console.error('Claim error:', error);
-        showAlert('error', 'Connection failed. Please check your internet and try again.');
         setButtonState('error');
     } finally {
         state.isProcessing = false;
@@ -349,36 +354,46 @@ async function handleClaim(e) {
 // Handle Claim Success
 // ============================================
 function handleClaimSuccess(data) {
-    // Show success message
-    showAlert('success', `Great! You received ${data.points} points! Your balance is now ${formatNumber(data.balance)} points.`);
+    // Hide info box
+    if (elements.alertBox) {
+        elements.alertBox.classList.add('hidden');
+    }
     
-    // Update button to success state
+    // Show SUCCESS message in timer box
+    if (elements.timerBox) {
+        elements.timerBox.classList.remove('hidden');
+        elements.timerBox.style.background = 'linear-gradient(135deg, rgba(16, 185, 129, 0.2), rgba(5, 150, 105, 0.1))';
+        elements.timerBox.style.borderColor = 'rgba(16, 185, 129, 0.5)';
+        
+        elements.timerBox.innerHTML = `
+            <span style="font-size: 2.5rem;">✅</span>
+            <div class="timer-content">
+                <span style="color: var(--success); font-size: 1.25rem; font-weight: 700;">SUCCESSFULLY CLAIMED!</span>
+                <span style="display: block; color: var(--text-primary); font-size: 1rem; margin-top: 0.5rem;">
+                    You got: <strong style="color: var(--success);">+${data.points} points</strong><br>
+                    Your balance: <strong style="color: var(--success);">${formatNumber(data.balance)} points</strong><br>
+                    Next claim in: <strong style="color: var(--warning);">24 hours</strong>
+                </span>
+            </div>
+        `;
+    }
+    
+    // Update balance
+    localStorage.setItem('lastBalance', data.balance);
+    
+    // Update button
     setButtonState('success');
     
-    // Update balance display with animation
-    if (elements.balanceBox && elements.balanceValue) {
-        elements.balanceBox.classList.remove('hidden');
-        
-        // Add highlight animation
-        elements.balanceBox.style.animation = 'bounce 0.5s';
-        setTimeout(() => elements.balanceBox.style.animation = '', 500);
-        
-        elements.balanceValue.textContent = `${formatNumber(data.balance)} points`;
-        localStorage.setItem('lastBalance', data.balance);
-    }
-    
-    // Start cooldown timer
-    if (data.next) {
-        const nextClaim = new Date(data.next);
-        localStorage.setItem('lastClaimTime', Date.now().toString());
-        
-        // Wait a bit before showing timer so success message is visible
-        setTimeout(() => {
+    // After 5 seconds, switch to countdown timer
+    setTimeout(() => {
+        if (data.next) {
+            const nextClaim = new Date(data.next);
+            localStorage.setItem('lastClaimTime', Date.now().toString());
             startCooldownTimer(nextClaim);
-        }, 2000);
-    }
+        }
+    }, 5000);
     
-    // Update stats after claim
+    // Update stats
     setTimeout(updateStatus, 1000);
 }
 
@@ -388,101 +403,171 @@ function handleClaimSuccess(data) {
 function handleClaimError(data, statusCode) {
     const error = data.error || 'Unknown error occurred';
     
-    // Handle specific error cases with clear messages
+    // Hide info box
+    if (elements.alertBox) {
+        elements.alertBox.classList.add('hidden');
+    }
+    
     if (statusCode === 429 && error.includes('Already claimed')) {
-        // Already claimed today
-        showAlert('warning', `You've already claimed today! Come back in ${data.timeLeft || '24 hours'} for your next claim.`);
+        // ALREADY CLAIMED TODAY - Show clear message
+        if (elements.timerBox) {
+            elements.timerBox.classList.remove('hidden');
+            elements.timerBox.style.background = 'linear-gradient(135deg, rgba(245, 158, 11, 0.2), rgba(251, 191, 36, 0.1))';
+            elements.timerBox.style.borderColor = 'rgba(245, 158, 11, 0.5)';
+            
+            elements.timerBox.innerHTML = `
+                <span style="font-size: 2.5rem;">⚠️</span>
+                <div class="timer-content">
+                    <span style="color: var(--warning); font-size: 1.25rem; font-weight: 700;">ALREADY CLAIMED TODAY!</span>
+                    <span style="display: block; color: var(--text-primary); font-size: 1rem; margin-top: 0.5rem;">
+                        Your balance: <strong>${formatNumber(data.balance || 0)} points</strong><br>
+                        Time remaining: <strong style="color: var(--warning);">${data.timeLeft || '24 hours'}</strong><br>
+                        Come back tomorrow to claim again!
+                    </span>
+                </div>
+            `;
+        }
         
         // Update balance if provided
         if (data.balance !== undefined) {
-            elements.balanceBox.classList.remove('hidden');
-            elements.balanceValue.textContent = `${formatNumber(data.balance)} points`;
             localStorage.setItem('lastBalance', data.balance);
         }
         
-        // Start cooldown timer
+        // Start countdown after 3 seconds
         if (data.nextClaim) {
-            startCooldownTimer(new Date(data.nextClaim));
+            setTimeout(() => {
+                startCooldownTimer(new Date(data.nextClaim));
+            }, 3000);
         }
         
         setButtonState('disabled');
         
     } else if (statusCode === 429) {
-        // Rate limited
-        showAlert('warning', `Too fast! Please wait ${data.retryAfter || 2} seconds and try again.`);
-        setButtonState('error');
+        // RATE LIMITED - Too fast
+        if (elements.timerBox) {
+            elements.timerBox.classList.remove('hidden');
+            elements.timerBox.style.background = 'linear-gradient(135deg, rgba(245, 158, 11, 0.2), rgba(251, 191, 36, 0.1))';
+            elements.timerBox.style.borderColor = 'rgba(245, 158, 11, 0.5)';
+            
+            elements.timerBox.innerHTML = `
+                <span style="font-size: 2.5rem;">⏱️</span>
+                <div class="timer-content">
+                    <span style="color: var(--warning); font-size: 1.25rem; font-weight: 700;">TOO FAST!</span>
+                    <span style="display: block; color: var(--text-primary); font-size: 1rem; margin-top: 0.5rem;">
+                        Please wait <strong>${data.retryAfter || 2} seconds</strong> and try again.<br>
+                        Slow down to avoid being blocked.
+                    </span>
+                </div>
+            `;
+            
+            // Hide after retry time
+            setTimeout(() => {
+                elements.timerBox.classList.add('hidden');
+            }, (data.retryAfter || 2) * 1000);
+        }
+        
+        setButtonState('rate-limited');
         
     } else if (statusCode === 400) {
-        // Invalid Discord ID
-        showAlert('error', 'Invalid Discord ID format. Please enter a valid 17-20 digit Discord ID.');
+        // INVALID DISCORD ID
+        if (elements.timerBox) {
+            elements.timerBox.classList.remove('hidden');
+            elements.timerBox.style.background = 'linear-gradient(135deg, rgba(239, 68, 68, 0.2), rgba(220, 38, 38, 0.1))';
+            elements.timerBox.style.borderColor = 'rgba(239, 68, 68, 0.5)';
+            
+            elements.timerBox.innerHTML = `
+                <span style="font-size: 2.5rem;">❌</span>
+                <div class="timer-content">
+                    <span style="color: var(--danger); font-size: 1.25rem; font-weight: 700;">INVALID DISCORD ID!</span>
+                    <span style="display: block; color: var(--text-primary); font-size: 1rem; margin-top: 0.5rem;">
+                        Discord ID must be <strong>17-20 digits</strong> only.<br>
+                        Example: <code style="background: var(--bg-secondary); padding: 2px 6px; border-radius: 4px;">823456789012345678</code>
+                    </span>
+                </div>
+            `;
+            
+            // Hide after 5 seconds
+            setTimeout(() => {
+                elements.timerBox.classList.add('hidden');
+            }, 5000);
+        }
+        
+        elements.userId.style.animation = 'errorShake 0.5s';
+        setTimeout(() => elements.userId.style.animation = '', 500);
         setButtonState('error');
         
     } else if (statusCode === 403) {
-        // Account blacklisted
-        showAlert('error', 'Your account has been restricted. Please contact support if you believe this is an error.');
+        // ACCOUNT BLACKLISTED
+        if (elements.timerBox) {
+            elements.timerBox.classList.remove('hidden');
+            elements.timerBox.style.background = 'linear-gradient(135deg, rgba(239, 68, 68, 0.2), rgba(220, 38, 38, 0.1))';
+            elements.timerBox.style.borderColor = 'rgba(239, 68, 68, 0.5)';
+            
+            elements.timerBox.innerHTML = `
+                <span style="font-size: 2.5rem;">🚫</span>
+                <div class="timer-content">
+                    <span style="color: var(--danger); font-size: 1.25rem; font-weight: 700;">ACCOUNT BLACKLISTED!</span>
+                    <span style="display: block; color: var(--text-primary); font-size: 1rem; margin-top: 0.5rem;">
+                        Your account has been restricted from claiming points.<br>
+                        Contact support on Discord if you think this is a mistake.
+                    </span>
+                </div>
+            `;
+        }
+        
         setButtonState('error');
         
     } else if (statusCode === 500 || statusCode === 503) {
-        // Server error
-        showAlert('error', 'The service is temporarily unavailable. Please try again in a few minutes.');
+        // SERVER ERROR
+        if (elements.timerBox) {
+            elements.timerBox.classList.remove('hidden');
+            elements.timerBox.style.background = 'linear-gradient(135deg, rgba(239, 68, 68, 0.2), rgba(220, 38, 38, 0.1))';
+            elements.timerBox.style.borderColor = 'rgba(239, 68, 68, 0.5)';
+            
+            elements.timerBox.innerHTML = `
+                <span style="font-size: 2.5rem;">⚠️</span>
+                <div class="timer-content">
+                    <span style="color: var(--danger); font-size: 1.25rem; font-weight: 700;">SERVER ERROR!</span>
+                    <span style="display: block; color: var(--text-primary); font-size: 1rem; margin-top: 0.5rem;">
+                        The service is temporarily unavailable.<br>
+                        Please try again in a few minutes.
+                    </span>
+                </div>
+            `;
+            
+            // Hide after 5 seconds
+            setTimeout(() => {
+                elements.timerBox.classList.add('hidden');
+            }, 5000);
+        }
+        
         setButtonState('error');
         
     } else {
-        // Generic error
-        showAlert('error', error);
+        // GENERIC ERROR
+        if (elements.timerBox) {
+            elements.timerBox.classList.remove('hidden');
+            elements.timerBox.style.background = 'linear-gradient(135deg, rgba(239, 68, 68, 0.2), rgba(220, 38, 38, 0.1))';
+            elements.timerBox.style.borderColor = 'rgba(239, 68, 68, 0.5)';
+            
+            elements.timerBox.innerHTML = `
+                <span style="font-size: 2.5rem;">❌</span>
+                <div class="timer-content">
+                    <span style="color: var(--danger); font-size: 1.25rem; font-weight: 700;">ERROR!</span>
+                    <span style="display: block; color: var(--text-primary); font-size: 1rem; margin-top: 0.5rem;">
+                        ${error}<br>
+                        Please try again.
+                    </span>
+                </div>
+            `;
+            
+            // Hide after 5 seconds
+            setTimeout(() => {
+                elements.timerBox.classList.add('hidden');
+            }, 5000);
+        }
+        
         setButtonState('error');
-    }
-}
-
-// ============================================
-// Show Alert
-// ============================================
-function showAlert(type, message) {
-    if (!elements.alertBox) return;
-    
-    // Hide timer box when showing non-info alerts
-    if (type !== 'info' && elements.timerBox) {
-        elements.timerBox.classList.add('hidden');
-    }
-    
-    const icons = {
-        info: 'ℹ️',
-        success: '✅',
-        warning: '⚠️',
-        error: '❌'
-    };
-    
-    // Clear and set new alert
-    elements.alertBox.className = `alert alert-${type}`;
-    elements.alertBox.innerHTML = `
-        <span class="alert-icon">${icons[type]}</span>
-        <div class="alert-content">
-            <strong>${type.charAt(0).toUpperCase() + type.slice(1)}</strong>
-            <p>${message}</p>
-        </div>
-    `;
-    
-    elements.alertBox.classList.remove('hidden');
-    
-    // Add slide animation
-    elements.alertBox.style.animation = 'slideDown 0.3s ease-out';
-    
-    // Auto-hide success messages after 5 seconds
-    if (type === 'success') {
-        setTimeout(() => {
-            if (elements.alertBox.classList.contains('alert-success')) {
-                hideAlerts();
-            }
-        }, 5000);
-    }
-}
-
-// ============================================
-// Hide Alerts
-// ============================================
-function hideAlerts() {
-    if (elements.alertBox) {
-        elements.alertBox.classList.add('hidden');
     }
 }
 
@@ -526,6 +611,18 @@ function setButtonState(state) {
             }, 3000);
             break;
             
+        case 'rate-limited':
+            elements.claimButton.classList.add('error');
+            elements.buttonText.textContent = '⏱️ Too Fast! Wait 2s';
+            
+            // Reset after 2 seconds
+            setTimeout(() => {
+                elements.claimButton.classList.remove('error');
+                elements.buttonText.textContent = 'Claim Daily Points';
+                elements.claimButton.disabled = false;
+            }, 2000);
+            break;
+            
         case 'error':
             elements.claimButton.classList.add('error');
             elements.buttonText.textContent = '❌ Try Again';
@@ -558,9 +655,6 @@ function startCooldownTimer(nextClaimTime) {
         clearInterval(state.cooldownTimer);
     }
     
-    // Hide alert box when timer starts
-    hideAlerts();
-    
     // Show timer box
     if (elements.timerBox) {
         elements.timerBox.classList.remove('hidden');
@@ -588,20 +682,24 @@ function startCooldownTimer(nextClaimTime) {
             
             // Enable button
             elements.claimButton.disabled = false;
-            elements.buttonText.textContent = 'Claim Daily Points';
+            elements.buttonText.textContent = '🎉 Claim Available!';
+            elements.claimButton.classList.add('success');
             
             // Clear saved time
             localStorage.removeItem('lastClaimTime');
             
-            // Show ready message
-            showAlert('success', '🎉 Your daily claim is ready! Claim your points now!');
-            
-            // Play a subtle sound if available (optional)
+            // Play a subtle sound if available
             try {
                 const audio = new Audio('data:audio/wav;base64,UklGRigAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQQAAACAAABgAA==');
                 audio.volume = 0.3;
                 audio.play();
             } catch(e) {}
+            
+            // Reset button after animation
+            setTimeout(() => {
+                elements.claimButton.classList.remove('success');
+                elements.buttonText.textContent = 'Claim Daily Points';
+            }, 3000);
             
             return;
         }
@@ -636,10 +734,14 @@ function checkCooldown() {
         // Still in cooldown
         const nextClaim = new Date(state.lastClaimTime + CONFIG.COOLDOWN_DURATION);
         startCooldownTimer(nextClaim);
+        
+        // Hide info box if in cooldown
+        if (elements.alertBox) {
+            elements.alertBox.classList.add('hidden');
+        }
     } else {
         // Cooldown expired
         localStorage.removeItem('lastClaimTime');
-        showAlert('info', 'Your daily claim is ready! Enter your Discord ID to claim 2 points.');
     }
 }
 
