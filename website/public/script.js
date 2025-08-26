@@ -1,281 +1,309 @@
-// Bubble Bot - Enhanced JavaScript with Clear Feedback
+// Bubble Bot - Redesigned JavaScript
+// Clean, efficient, no unnecessary animations
 
+// ============================================
 // Configuration
+// ============================================
 const CONFIG = {
-    API_BASE: window.location.hostname === 'localhost' ? 
-        'http://localhost:3000/api' : '/api',
+    API_BASE: window.location.hostname === 'localhost' 
+        ? 'http://localhost:3000/api' 
+        : '/api',
     UPDATE_INTERVAL: 30000,
-    COOLDOWN: 86400000
+    COOLDOWN_DURATION: 86400000, // 24 hours
+    MIN_ID_LENGTH: 15,
+    MAX_ID_LENGTH: 25
 };
 
-// State
+// ============================================
+// State Management
+// ============================================
 const state = {
     isOnline: false,
-    lastClaim: 0,
     cooldownTimer: null,
-    currentBalance: 0
+    updateInterval: null,
+    lastClaimTime: 0
 };
 
-// DOM Elements
+// ============================================
+// DOM Cache
+// ============================================
 const elements = {};
 
-// Initialize
-document.addEventListener('DOMContentLoaded', init);
-
-async function init() {
+// ============================================
+// Initialize Application
+// ============================================
+document.addEventListener('DOMContentLoaded', () => {
     cacheElements();
-    loadSavedId();
+    loadSavedData();
     setupEventListeners();
-    await updateStatus();
-}
+    initializeApp();
+});
 
-// Cache DOM elements
+// ============================================
+// Cache DOM Elements
+// ============================================
 function cacheElements() {
-    // Status elements
+    // Status
     elements.statusDot = document.getElementById('statusDot');
     elements.statusText = document.getElementById('statusText');
-    elements.statusBadge = document.getElementById('statusBadge');
     
-    // Stats elements
+    // Stats
     elements.totalUsers = document.getElementById('totalUsers');
     elements.totalPoints = document.getElementById('totalPoints');
-    elements.totalCookies = document.getElementById('totalCookies');
     elements.activeToday = document.getElementById('activeToday');
+    elements.totalCookies = document.getElementById('totalCookies');
     
-    // Leaderboard
-    elements.leaderboard = document.getElementById('leaderboard');
-    
-    // Claim form elements
+    // Form
     elements.claimForm = document.getElementById('claimForm');
     elements.userId = document.getElementById('userId');
     elements.claimButton = document.getElementById('claimButton');
-    elements.buttonIcon = document.getElementById('buttonIcon');
     elements.buttonText = document.getElementById('buttonText');
     elements.spinner = document.getElementById('spinner');
-    
-    // Feedback elements
-    elements.feedbackContainer = document.getElementById('feedbackContainer');
-    elements.feedbackMessage = document.getElementById('feedbackMessage');
-    elements.cooldownTimer = document.getElementById('cooldownTimer');
-    elements.timerDisplay = document.getElementById('timerDisplay');
-    
-    // Input helper elements
-    elements.inputStatus = document.getElementById('inputStatus');
     elements.charCount = document.getElementById('charCount');
     
-    // Balance display
-    elements.balanceDisplay = document.getElementById('balanceDisplay');
+    // Feedback
+    elements.alertBox = document.getElementById('alertBox');
+    elements.timerBox = document.getElementById('timerBox');
+    elements.timerValue = document.getElementById('timerValue');
+    elements.balanceBox = document.getElementById('balanceBox');
     elements.balanceValue = document.getElementById('balanceValue');
+    
+    // Leaderboard
+    elements.leaderboard = document.getElementById('leaderboard');
 }
 
-// Load saved Discord ID
-function loadSavedId() {
+// ============================================
+// Load Saved Data
+// ============================================
+function loadSavedData() {
+    // Load saved Discord ID
     const savedId = localStorage.getItem('discordId');
     if (savedId && elements.userId) {
         elements.userId.value = savedId;
-        updateCharCount();
-        validateId(savedId);
+        validateInput();
+    }
+    
+    // Load last claim time
+    const lastClaim = localStorage.getItem('lastClaimTime');
+    if (lastClaim) {
+        state.lastClaimTime = parseInt(lastClaim);
+        checkCooldown();
     }
 }
 
-// Setup event listeners
+// ============================================
+// Setup Event Listeners
+// ============================================
 function setupEventListeners() {
     // Form submission
     if (elements.claimForm) {
         elements.claimForm.addEventListener('submit', handleClaim);
     }
     
-    // Discord ID input validation
+    // Input validation
     if (elements.userId) {
-        elements.userId.addEventListener('input', (e) => {
-            // Only allow numbers
-            e.target.value = e.target.value.replace(/\D/g, '');
-            updateCharCount();
-            validateId(e.target.value);
-        });
-        
+        elements.userId.addEventListener('input', validateInput);
         elements.userId.addEventListener('paste', (e) => {
-            setTimeout(() => {
-                e.target.value = e.target.value.replace(/\D/g, '');
-                updateCharCount();
-                validateId(e.target.value);
-            }, 0);
+            setTimeout(validateInput, 0);
         });
     }
 }
 
-// Update character count display
-function updateCharCount() {
-    if (elements.charCount && elements.userId) {
-        const length = elements.userId.value.length;
-        elements.charCount.textContent = `${length}/15-25`;
+// ============================================
+// Initialize Application
+// ============================================
+async function initializeApp() {
+    // Initial status update
+    await updateStatus();
+    
+    // Setup periodic updates
+    state.updateInterval = setInterval(updateStatus, CONFIG.UPDATE_INTERVAL);
+}
+
+// ============================================
+// Validate Input
+// ============================================
+function validateInput() {
+    const input = elements.userId;
+    const value = input.value.replace(/\D/g, ''); // Remove non-digits
+    
+    if (value !== input.value) {
+        input.value = value;
+    }
+    
+    const length = value.length;
+    
+    // Update character count
+    if (elements.charCount) {
+        elements.charCount.textContent = `${length}/${CONFIG.MIN_ID_LENGTH}-${CONFIG.MAX_ID_LENGTH}`;
         
-        if (length >= 15 && length <= 25) {
-            elements.charCount.style.color = 'var(--accent-green)';
-        } else if (length > 0) {
-            elements.charCount.style.color = 'var(--accent-orange)';
-        } else {
+        if (length === 0) {
             elements.charCount.style.color = 'var(--text-muted)';
-        }
-    }
-}
-
-// Validate Discord ID
-function validateId(id) {
-    const isValid = /^[0-9]{15,25}$/.test(id);
-    
-    if (elements.userId) {
-        if (id.length === 0) {
-            elements.userId.classList.remove('error', 'success');
-            elements.inputStatus.textContent = '';
-            elements.inputStatus.className = 'input-status';
-        } else if (isValid) {
-            elements.userId.classList.remove('error');
-            elements.userId.classList.add('success');
-            elements.inputStatus.textContent = '✓ Valid Discord ID format';
-            elements.inputStatus.className = 'input-status valid';
+            input.classList.remove('error', 'success');
+        } else if (length >= CONFIG.MIN_ID_LENGTH && length <= CONFIG.MAX_ID_LENGTH) {
+            elements.charCount.style.color = 'var(--success)';
+            input.classList.remove('error');
+            input.classList.add('success');
         } else {
-            elements.userId.classList.add('error');
-            elements.userId.classList.remove('success');
-            if (id.length < 15) {
-                elements.inputStatus.textContent = `Need ${15 - id.length} more digits`;
-            } else if (id.length > 25) {
-                elements.inputStatus.textContent = `Too many digits (max 25)`;
-            } else {
-                elements.inputStatus.textContent = '✗ Invalid ID format';
-            }
-            elements.inputStatus.className = 'input-status invalid';
+            elements.charCount.style.color = 'var(--warning)';
+            input.classList.add('error');
+            input.classList.remove('success');
         }
     }
     
-    return isValid;
+    return length >= CONFIG.MIN_ID_LENGTH && length <= CONFIG.MAX_ID_LENGTH;
 }
 
-// Update status and stats
+// ============================================
+// Update Status & Stats
+// ============================================
 async function updateStatus() {
     try {
         const response = await fetch(`${CONFIG.API_BASE}/status`);
-        if (!response.ok) throw new Error('Status fetch failed');
+        if (!response.ok) throw new Error('Failed to fetch status');
         
         const data = await response.json();
-        updateUI(data);
-        updateLeaderboard(data.leaderboard || []);
+        
+        // Update bot status
+        updateBotStatus(data.online);
+        
+        // Update stats
+        updateStats(data.stats);
+        
+        // Update leaderboard
+        updateLeaderboard(data.leaderboard);
         
     } catch (error) {
         console.error('Status update failed:', error);
-        setOfflineStatus();
+        updateBotStatus(false);
     }
 }
 
-// Update UI with status data
-function updateUI(data) {
-    // Bot status
-    state.isOnline = data.online || false;
+// ============================================
+// Update Bot Status
+// ============================================
+function updateBotStatus(isOnline) {
+    state.isOnline = isOnline;
     
-    if (elements.statusBadge && elements.statusDot && elements.statusText) {
-        const statusClass = state.isOnline ? 'online' : 'offline';
-        elements.statusBadge.className = `status-badge ${statusClass}`;
-        elements.statusDot.className = `status-dot ${statusClass}`;
-        elements.statusText.textContent = state.isOnline ? 'BOT ONLINE' : 'BOT OFFLINE';
-    }
-    
-    // Stats with animation
-    if (data.stats) {
-        animateNumber('totalUsers', data.stats.users);
-        animateNumber('totalPoints', data.stats.points);
-        animateNumber('totalCookies', data.stats.cookies);
-        animateNumber('activeToday', data.stats.active);
+    if (elements.statusDot && elements.statusText) {
+        if (isOnline) {
+            elements.statusDot.classList.add('online');
+            elements.statusDot.classList.remove('offline');
+            elements.statusText.textContent = 'Bot Online';
+        } else {
+            elements.statusDot.classList.add('offline');
+            elements.statusDot.classList.remove('online');
+            elements.statusText.textContent = 'Bot Offline';
+        }
     }
 }
 
-// Animate number changes
-function animateNumber(elementId, targetValue) {
-    const element = elements[elementId];
+// ============================================
+// Update Stats
+// ============================================
+function updateStats(stats) {
+    if (!stats) return;
+    
+    // Update each stat with animation
+    animateNumber(elements.totalUsers, stats.users || 0);
+    animateNumber(elements.totalPoints, stats.points || 0);
+    animateNumber(elements.activeToday, stats.active || 0);
+    animateNumber(elements.totalCookies, stats.cookies || 0);
+}
+
+// ============================================
+// Animate Number Change
+// ============================================
+function animateNumber(element, target) {
     if (!element) return;
     
-    const currentValue = parseInt(element.textContent.replace(/,/g, '')) || 0;
-    const increment = Math.ceil((targetValue - currentValue) / 20);
-    let current = currentValue;
+    const current = parseInt(element.textContent.replace(/,/g, '')) || 0;
+    const difference = target - current;
     
+    if (difference === 0) return;
+    
+    const duration = 500;
+    const steps = 20;
+    const stepDuration = duration / steps;
+    const increment = difference / steps;
+    
+    let step = 0;
     const timer = setInterval(() => {
-        current += increment;
-        if ((increment > 0 && current >= targetValue) || 
-            (increment < 0 && current <= targetValue)) {
-            current = targetValue;
+        step++;
+        if (step >= steps) {
+            element.textContent = formatNumber(target);
             clearInterval(timer);
+        } else {
+            const value = Math.round(current + (increment * step));
+            element.textContent = formatNumber(value);
         }
-        element.textContent = formatNumber(current);
-    }, 50);
+    }, stepDuration);
 }
 
-// Set offline status
-function setOfflineStatus() {
-    state.isOnline = false;
-    if (elements.statusBadge && elements.statusDot && elements.statusText) {
-        elements.statusBadge.className = 'status-badge offline';
-        elements.statusDot.className = 'status-dot offline';
-        elements.statusText.textContent = 'BOT OFFLINE';
-    }
-}
-
-// Update leaderboard
-function updateLeaderboard(users) {
-    if (!elements.leaderboard) return;
+// ============================================
+// Update Leaderboard
+// ============================================
+function updateLeaderboard(leaderboard) {
+    if (!elements.leaderboard || !leaderboard) return;
     
-    if (!users.length) {
-        elements.leaderboard.innerHTML = `
-            <div class="leaderboard-loading">
-                <p>No leaderboard data available yet</p>
-            </div>
-        `;
+    if (leaderboard.length === 0) {
+        elements.leaderboard.innerHTML = '<div class="loading">No data available</div>';
         return;
     }
     
-    elements.leaderboard.innerHTML = users.slice(0, 10).map((user, i) => {
-        const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `#${i + 1}`;
-        return `
-            <div class="leaderboard-item">
-                <div class="leaderboard-rank">
-                    <span class="rank-medal">${medal}</span>
-                    <span class="leaderboard-user">${escapeHtml(user.name || 'Anonymous')}</span>
+    elements.leaderboard.innerHTML = leaderboard
+        .slice(0, 10)
+        .map((user, index) => {
+            const rankClass = index === 0 ? 'gold' : index === 1 ? 'silver' : index === 2 ? 'bronze' : '';
+            const rankDisplay = index < 3 ? ['🥇', '🥈', '🥉'][index] : `${index + 1}`;
+            
+            return `
+                <div class="leaderboard-item">
+                    <div class="leaderboard-rank">
+                        <span class="rank-number ${rankClass}">${rankDisplay}</span>
+                        <span class="leaderboard-name">${escapeHtml(user.name || 'Anonymous')}</span>
+                    </div>
+                    <span class="leaderboard-points">${formatNumber(user.points)} pts</span>
                 </div>
-                <span class="leaderboard-points">${formatNumber(user.points)} pts</span>
-            </div>
-        `;
-    }).join('');
+            `;
+        })
+        .join('');
 }
 
-// Handle claim submission
+// ============================================
+// Handle Claim
+// ============================================
 async function handleClaim(e) {
     e.preventDefault();
     
     // Rate limiting
     const now = Date.now();
-    if (now - state.lastClaim < 2000) {
-        showFeedback('warning', '⚡', 'Slow Down!', 'Please wait a moment before trying again.');
+    if (now - state.lastClaimTime < 2000) {
+        showAlert('warning', 'Please wait a moment before trying again.');
+        return;
+    }
+    
+    // Validate input
+    if (!validateInput()) {
+        showAlert('error', `Discord ID must be ${CONFIG.MIN_ID_LENGTH}-${CONFIG.MAX_ID_LENGTH} digits.`);
         return;
     }
     
     const userId = elements.userId.value.trim();
     
-    if (!validateId(userId)) {
-        showFeedback('error', '❌', 'Invalid Discord ID', 
-            `Discord IDs must be 15-25 digits long. Your ID has ${userId.length} digits.`);
-        return;
-    }
-    
-    // Save ID
+    // Save Discord ID
     localStorage.setItem('discordId', userId);
-    state.lastClaim = now;
     
-    // UI state
+    // Update UI
     setLoadingState(true);
-    hideFeedback();
+    hideAlerts();
     
     try {
         const response = await fetch(`${CONFIG.API_BASE}/daily`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+                'Content-Type': 'application/json'
+            },
             body: JSON.stringify({ userId })
         });
         
@@ -286,185 +314,215 @@ async function handleClaim(e) {
         } else {
             handleClaimError(data, response.status);
         }
+        
     } catch (error) {
         console.error('Claim error:', error);
-        showFeedback('error', '🔌', 'Connection Error', 
-            'Unable to connect to the server. Please check your internet connection and try again.');
+        showAlert('error', 'Connection failed. Please check your internet and try again.');
     } finally {
         setLoadingState(false);
+        state.lastClaimTime = now;
     }
 }
 
-// Set loading state
-function setLoadingState(loading) {
-    const button = elements.claimButton;
-    if (button) {
-        button.disabled = loading;
-        
-        if (loading) {
-            elements.buttonIcon.classList.add('hidden');
-            elements.spinner.classList.remove('hidden');
-            elements.buttonText.textContent = 'CLAIMING REWARD...';
-        } else {
-            elements.buttonIcon.classList.remove('hidden');
-            elements.spinner.classList.add('hidden');
-            elements.buttonText.textContent = 'CLAIM DAILY REWARD';
-        }
-    }
-}
-
-// Handle successful claim
+// ============================================
+// Handle Claim Success
+// ============================================
 function handleClaimSuccess(data) {
-    // Update button state
-    const button = elements.claimButton;
-    if (button) {
-        button.classList.add('success');
-        elements.buttonIcon.textContent = '✅';
-        elements.buttonText.textContent = 'REWARD CLAIMED!';
+    // Show success state
+    elements.claimButton.classList.add('success');
+    elements.buttonText.textContent = '✓ Claimed Successfully!';
+    
+    // Show success message
+    showAlert('success', `You received ${data.points} points! Balance: ${formatNumber(data.balance)} points`);
+    
+    // Update balance
+    if (elements.balanceBox && elements.balanceValue) {
+        elements.balanceBox.classList.remove('hidden');
+        elements.balanceValue.textContent = `${formatNumber(data.balance)} points`;
     }
     
-    // Show success feedback
-    showFeedback('success', '🎉', 'Points Claimed Successfully!', 
-        `You've received <strong>${data.points} points</strong>! Your new balance is <strong>${formatNumber(data.balance)} points</strong>.`);
-    
-    // Update balance display
-    state.currentBalance = data.balance;
-    updateBalanceDisplay(data.balance);
-    
-    // Start cooldown timer
+    // Start cooldown
     if (data.next) {
-        startCooldownTimer(new Date(data.next));
+        const nextClaim = new Date(data.next);
+        localStorage.setItem('lastClaimTime', Date.now().toString());
+        startCooldownTimer(nextClaim);
     }
     
     // Reset button after delay
     setTimeout(() => {
-        if (button) {
-            button.classList.remove('success');
-            elements.buttonIcon.textContent = '✓';
-            elements.buttonText.textContent = 'CLAIMED TODAY';
-            button.disabled = true;
-        }
-        updateStatus();
+        elements.claimButton.classList.remove('success');
+        elements.buttonText.textContent = 'Already Claimed Today';
+        elements.claimButton.disabled = true;
     }, 3000);
+    
+    // Update stats
+    updateStatus();
 }
 
-// Handle claim error
+// ============================================
+// Handle Claim Error
+// ============================================
 function handleClaimError(data, statusCode) {
-    // Update button state
-    const button = elements.claimButton;
-    if (button) {
-        button.classList.add('error');
-        elements.buttonIcon.textContent = '❌';
-        elements.buttonText.textContent = 'CLAIM FAILED';
-    }
+    // Show error state
+    elements.claimButton.classList.add('error');
+    elements.buttonText.textContent = '✗ Claim Failed';
     
     setTimeout(() => {
-        if (button) {
-            button.classList.remove('error');
-            elements.buttonIcon.textContent = '💎';
-            elements.buttonText.textContent = 'CLAIM DAILY REWARD';
-        }
+        elements.claimButton.classList.remove('error');
+        elements.buttonText.textContent = 'Claim Daily Points';
     }, 3000);
     
-    const error = data.error || 'Unknown error';
+    // Handle specific errors
+    const error = data.error || 'Unknown error occurred';
     
-    // Handle specific error cases
     if (error.includes('Already claimed')) {
-        showFeedback('warning', '⏰', 'Already Claimed Today', 
-            `You've already claimed your daily points. Come back in <strong>${data.timeLeft || '24 hours'}</strong>. Your current balance: <strong>${formatNumber(data.balance)} points</strong>.`);
-        
+        showAlert('warning', `Already claimed. Next claim: ${data.timeLeft || 'in 24 hours'}`);
+        if (data.balance) {
+            elements.balanceBox.classList.remove('hidden');
+            elements.balanceValue.textContent = `${formatNumber(data.balance)} points`;
+        }
         if (data.nextClaim) {
             startCooldownTimer(new Date(data.nextClaim));
         }
-        updateBalanceDisplay(data.balance);
-    } else if (error.includes('blacklisted')) {
-        showFeedback('error', '🚫', 'Account Restricted', 
-            'Your account has been temporarily restricted. Please contact support if you believe this is an error.');
     } else if (statusCode === 400) {
-        showFeedback('error', '⚠️', 'Invalid Discord ID', 
-            'The Discord ID you entered is not valid. Please check and try again.');
+        showAlert('error', 'Invalid Discord ID. Please check and try again.');
+    } else if (statusCode === 403) {
+        showAlert('error', 'Account restricted. Contact support if this is an error.');
     } else if (statusCode === 429) {
-        showFeedback('warning', '⚡', 'Too Many Requests', 
-            `Please wait ${data.retryAfter || 'a moment'} before trying again.`);
+        showAlert('warning', `Too many requests. Wait ${data.retryAfter || 'a moment'}.`);
     } else {
-        showFeedback('error', '❌', 'Claim Failed', error);
+        showAlert('error', error);
     }
 }
 
-// Show feedback message
-function showFeedback(type, icon, title, message) {
-    if (!elements.feedbackContainer || !elements.feedbackMessage) return;
+// ============================================
+// Show Alert
+// ============================================
+function showAlert(type, message) {
+    if (!elements.alertBox) return;
     
-    elements.feedbackMessage.className = `feedback-message ${type}`;
-    elements.feedbackMessage.innerHTML = `
-        <span class="feedback-icon">${icon}</span>
-        <div class="feedback-content">
-            <span class="feedback-title">${title}</span>
-            <span class="feedback-text">${message}</span>
+    const icons = {
+        info: 'ℹ️',
+        success: '✅',
+        warning: '⚠️',
+        error: '❌'
+    };
+    
+    elements.alertBox.className = `alert alert-${type}`;
+    elements.alertBox.innerHTML = `
+        <span class="alert-icon">${icons[type]}</span>
+        <div class="alert-content">
+            <p>${message}</p>
         </div>
     `;
     
-    elements.feedbackContainer.classList.remove('hidden');
+    elements.alertBox.classList.remove('hidden');
+}
+
+// ============================================
+// Hide Alerts
+// ============================================
+function hideAlerts() {
+    if (elements.alertBox) {
+        elements.alertBox.classList.add('hidden');
+    }
+}
+
+// ============================================
+// Set Loading State
+// ============================================
+function setLoadingState(loading) {
+    if (!elements.claimButton) return;
     
-    // Auto-hide after delay
-    setTimeout(() => {
-        hideFeedback();
-    }, 10000);
-}
-
-// Hide feedback message
-function hideFeedback() {
-    if (elements.feedbackContainer) {
-        elements.feedbackContainer.classList.add('hidden');
+    elements.claimButton.disabled = loading;
+    
+    if (loading) {
+        elements.spinner.classList.remove('hidden');
+        elements.buttonText.textContent = 'Claiming...';
+    } else {
+        elements.spinner.classList.add('hidden');
+        elements.buttonText.textContent = 'Claim Daily Points';
     }
 }
 
-// Update balance display
-function updateBalanceDisplay(balance) {
-    if (elements.balanceDisplay && elements.balanceValue) {
-        elements.balanceValue.textContent = `${formatNumber(balance)} points`;
-        elements.balanceDisplay.classList.remove('hidden');
-    }
-}
-
-// Start cooldown timer
-function startCooldownTimer(nextClaim) {
+// ============================================
+// Start Cooldown Timer
+// ============================================
+function startCooldownTimer(nextClaimTime) {
+    // Clear existing timer
     if (state.cooldownTimer) {
         clearInterval(state.cooldownTimer);
     }
     
-    if (!elements.cooldownTimer || !elements.timerDisplay) return;
+    // Show timer box
+    if (elements.timerBox) {
+        elements.timerBox.classList.remove('hidden');
+    }
     
-    elements.cooldownTimer.classList.remove('hidden');
-    
+    // Update timer function
     const updateTimer = () => {
         const now = Date.now();
-        const timeLeft = nextClaim.getTime() - now;
+        const remaining = nextClaimTime.getTime() - now;
         
-        if (timeLeft <= 0) {
-            clearInterval(state.cooldownTimer);
-            elements.cooldownTimer.classList.add('hidden');
-            if (elements.claimButton) {
-                elements.claimButton.disabled = false;
-                elements.buttonIcon.textContent = '🎁';
-                elements.buttonText.textContent = 'CLAIM DAILY POINTS';
+        if (remaining <= 0) {
+            // Cooldown finished
+            if (state.cooldownTimer) {
+                clearInterval(state.cooldownTimer);
+                state.cooldownTimer = null;
             }
+            
+            elements.timerBox.classList.add('hidden');
+            elements.claimButton.disabled = false;
+            elements.buttonText.textContent = 'Claim Daily Points';
+            
+            localStorage.removeItem('lastClaimTime');
             return;
         }
         
-        const hours = Math.floor(timeLeft / 3600000);
-        const minutes = Math.floor((timeLeft % 3600000) / 60000);
-        const seconds = Math.floor((timeLeft % 60000) / 1000);
+        // Calculate time parts
+        const hours = Math.floor(remaining / 3600000);
+        const minutes = Math.floor((remaining % 3600000) / 60000);
+        const seconds = Math.floor((remaining % 60000) / 1000);
         
-        elements.timerDisplay.textContent = 
-            `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+        // Update display
+        if (elements.timerValue) {
+            elements.timerValue.textContent = 
+                `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+        }
     };
     
+    // Start timer
     updateTimer();
     state.cooldownTimer = setInterval(updateTimer, 1000);
 }
 
-// Utility functions
+// ============================================
+// Check Cooldown
+// ============================================
+function checkCooldown() {
+    if (!state.lastClaimTime) return;
+    
+    const now = Date.now();
+    const elapsed = now - state.lastClaimTime;
+    
+    if (elapsed < CONFIG.COOLDOWN_DURATION) {
+        // Still in cooldown
+        const nextClaim = new Date(state.lastClaimTime + CONFIG.COOLDOWN_DURATION);
+        startCooldownTimer(nextClaim);
+        
+        if (elements.claimButton) {
+            elements.claimButton.disabled = true;
+            elements.buttonText.textContent = 'Already Claimed Today';
+        }
+    } else {
+        // Cooldown expired
+        localStorage.removeItem('lastClaimTime');
+    }
+}
+
+// ============================================
+// Utility Functions
+// ============================================
 function formatNumber(num) {
     return new Intl.NumberFormat().format(num);
 }
@@ -474,292 +532,15 @@ function escapeHtml(text) {
     div.textContent = text;
     return div.innerHTML;
 }
-// Add this JavaScript to your script.js file or in a <script> tag
 
-// Slider functionality for Premium Services with TRUE INFINITE SCROLL
-function initServiceSlider() {
-    // Get slider elements
-    const sliderWrapper = document.querySelector('.services-slider-wrapper');
-    const servicesGrid = document.querySelector('.services-grid');
-    const originalCards = Array.from(document.querySelectorAll('.service-card'));
-    
-    // Check if elements exist
-    if (!servicesGrid || originalCards.length === 0) {
-        console.log('Slider elements not found');
-        return;
+// ============================================
+// Cleanup on page unload
+// ============================================
+window.addEventListener('beforeunload', () => {
+    if (state.cooldownTimer) {
+        clearInterval(state.cooldownTimer);
     }
-    
-    // Configuration
-    const slideWidth = 100; // percentage
-    const totalSlides = originalCards.length;
-    let currentPosition = 0;
-    let isAnimating = false;
-    
-    // Clone management
-    const clonesPerSide = 2; // Number of full sets to clone on each side
-    
-    function setupInfiniteSlides() {
-        servicesGrid.innerHTML = '';
-        
-        // Add multiple sets of clones at the beginning
-        for (let set = 0; set < clonesPerSide; set++) {
-            originalCards.forEach(card => {
-                const clone = card.cloneNode(true);
-                clone.classList.add('clone-before');
-                servicesGrid.appendChild(clone);
-            });
-        }
-        
-        // Add original slides
-        originalCards.forEach(card => {
-            servicesGrid.appendChild(card);
-        });
-        
-        // Add multiple sets of clones at the end
-        for (let set = 0; set < clonesPerSide; set++) {
-            originalCards.forEach(card => {
-                const clone = card.cloneNode(true);
-                clone.classList.add('clone-after');
-                servicesGrid.appendChild(clone);
-            });
-        }
-        
-        // Set initial position (start at first original slide)
-        currentPosition = -(clonesPerSide * totalSlides * slideWidth);
-        servicesGrid.style.transform = `translateX(${currentPosition}%)`;
-        servicesGrid.style.transition = 'none';
+    if (state.updateInterval) {
+        clearInterval(state.updateInterval);
     }
-    
-    setupInfiniteSlides();
-    
-    // Create navigation elements
-    createNavigationElements();
-    
-    function createNavigationElements() {
-        // Create arrows if they don't exist
-        let prevButton = document.querySelector('.slider-arrow.prev');
-        let nextButton = document.querySelector('.slider-arrow.next');
-        
-        if (!prevButton) {
-            prevButton = document.createElement('button');
-            prevButton.className = 'slider-arrow prev';
-            prevButton.innerHTML = '←';
-            sliderWrapper.appendChild(prevButton);
-        }
-        
-        if (!nextButton) {
-            nextButton = document.createElement('button');
-            nextButton.className = 'slider-arrow next';
-            nextButton.innerHTML = '→';
-            sliderWrapper.appendChild(nextButton);
-        }
-        
-        // Create dots
-        let dotsContainer = document.querySelector('.slider-dots');
-        if (!dotsContainer) {
-            dotsContainer = document.createElement('div');
-            dotsContainer.className = 'slider-dots';
-            
-            for (let i = 0; i < totalSlides; i++) {
-                const dot = document.createElement('button');
-                dot.className = 'slider-dot';
-                if (i === 0) dot.classList.add('active');
-                dot.onclick = () => goToSlide(i);
-                dotsContainer.appendChild(dot);
-            }
-            
-            sliderWrapper.parentNode.insertBefore(dotsContainer, sliderWrapper.nextSibling);
-        }
-        
-        // Event listeners
-        prevButton.onclick = () => move('prev');
-        nextButton.onclick = () => move('next');
-    }
-    
-    function move(direction) {
-        if (isAnimating) return;
-        isAnimating = true;
-        
-        // Calculate movement
-        const moveAmount = direction === 'next' ? -slideWidth : slideWidth;
-        currentPosition += moveAmount;
-        
-        // Update dots IMMEDIATELY when animation starts
-        updateDots();
-        
-        // Animate the movement with faster transition
-        servicesGrid.style.transition = 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)';
-        servicesGrid.style.transform = `translateX(${currentPosition}%)`;
-        
-        // Check boundaries and reset if needed
-        setTimeout(() => {
-            const totalWidth = totalSlides * slideWidth;
-            const resetThreshold = clonesPerSide * totalWidth;
-            
-            if (currentPosition <= -(resetThreshold + totalWidth)) {
-                // Moved too far right, reset to left side
-                servicesGrid.style.transition = 'none';
-                currentPosition += totalWidth;
-                servicesGrid.style.transform = `translateX(${currentPosition}%)`;
-            } else if (currentPosition >= -resetThreshold + totalWidth) {
-                // Moved too far left, reset to right side
-                servicesGrid.style.transition = 'none';
-                currentPosition -= totalWidth;
-                servicesGrid.style.transform = `translateX(${currentPosition}%)`;
-            }
-            
-            isAnimating = false;
-        }, 300);
-    }
-    
-    function goToSlide(index) {
-        if (isAnimating) return;
-        isAnimating = true;
-        
-        // Calculate the position for this slide
-        const targetPosition = -(clonesPerSide * totalSlides * slideWidth + index * slideWidth);
-        
-        // Update dots IMMEDIATELY
-        const dots = document.querySelectorAll('.slider-dot');
-        dots.forEach((dot, i) => {
-            dot.classList.toggle('active', i === index);
-        });
-        
-        servicesGrid.style.transition = 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)';
-        currentPosition = targetPosition;
-        servicesGrid.style.transform = `translateX(${currentPosition}%)`;
-        
-        setTimeout(() => {
-            isAnimating = false;
-        }, 300);
-    }
-    
-    function updateDots() {
-        const dots = document.querySelectorAll('.slider-dot');
-        const normalizedPosition = Math.abs(currentPosition + (clonesPerSide * totalSlides * slideWidth));
-        const currentSlideIndex = Math.round(normalizedPosition / slideWidth) % totalSlides;
-        
-        dots.forEach((dot, index) => {
-            dot.classList.toggle('active', index === currentSlideIndex);
-        });
-    }
-    
-    // Touch support with momentum
-    let startX = 0;
-    let currentX = 0;
-    let isDragging = false;
-    let startTime = 0;
-    let velocity = 0;
-    
-    function handleStart(clientX) {
-        if (isAnimating) return;
-        isDragging = true;
-        startX = clientX;
-        currentX = clientX;
-        startTime = Date.now();
-        velocity = 0;
-        servicesGrid.style.transition = 'none';
-    }
-    
-    function handleMove(clientX) {
-        if (!isDragging || isAnimating) return;
-        
-        const deltaX = clientX - currentX;
-        const deltaTime = Date.now() - startTime;
-        
-        if (deltaTime > 0) {
-            velocity = deltaX / deltaTime;
-        }
-        
-        currentX = clientX;
-        startTime = Date.now();
-        
-        const diff = clientX - startX;
-        const movePercent = (diff / window.innerWidth) * 100;
-        servicesGrid.style.transform = `translateX(${currentPosition + movePercent}%)`;
-    }
-    
-    function handleEnd(clientX) {
-        if (!isDragging || isAnimating) return;
-        isDragging = false;
-        
-        const diff = clientX - startX;
-        const threshold = window.innerWidth * 0.2; // 20% of screen width
-        const momentumThreshold = 0.5;
-        
-        // Check velocity for momentum scrolling
-        if (Math.abs(velocity) > momentumThreshold) {
-            move(velocity > 0 ? 'prev' : 'next');
-        } else if (Math.abs(diff) > threshold) {
-            move(diff > 0 ? 'prev' : 'next');
-        } else {
-            // Snap back with faster animation
-            servicesGrid.style.transition = 'transform 0.2s ease-out';
-            servicesGrid.style.transform = `translateX(${currentPosition}%)`;
-        }
-        
-        velocity = 0;
-    }
-    
-    // Touch events
-    servicesGrid.addEventListener('touchstart', e => handleStart(e.touches[0].clientX));
-    servicesGrid.addEventListener('touchmove', e => handleMove(e.touches[0].clientX));
-    servicesGrid.addEventListener('touchend', e => handleEnd(e.changedTouches[0].clientX));
-    
-    // Mouse events
-    servicesGrid.addEventListener('mousedown', e => {
-        e.preventDefault();
-        handleStart(e.clientX);
-    });
-    
-    document.addEventListener('mousemove', e => {
-        if (isDragging) {
-            e.preventDefault();
-            handleMove(e.clientX);
-        }
-    });
-    
-    document.addEventListener('mouseup', e => {
-        if (isDragging) {
-            handleEnd(e.clientX);
-        }
-    });
-    
-    // Keyboard
-    document.addEventListener('keydown', e => {
-        if (e.key === 'ArrowLeft') move('prev');
-        if (e.key === 'ArrowRight') move('next');
-    });
-    
-    // Auto-play
-    let autoplayInterval;
-    
-    function startAutoplay(delay = 3000) {
-        stopAutoplay();
-        autoplayInterval = setInterval(() => move('next'), delay);
-    }
-    
-    function stopAutoplay() {
-        if (autoplayInterval) {
-            clearInterval(autoplayInterval);
-            autoplayInterval = null;
-        }
-    }
-    
-    // Optional: Enable autoplay
-    // startAutoplay(3000);
-    
-    // Stop on hover
-    servicesGrid.addEventListener('mouseenter', stopAutoplay);
-    servicesGrid.addEventListener('touchstart', stopAutoplay);
-    
-    // Initialize
-    updateDots();
-}
-
-// Initialize when ready
-if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initServiceSlider);
-} else {
-    initServiceSlider();
-}
+});

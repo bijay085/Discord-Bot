@@ -1,297 +1,281 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Bubble Bot - Flame Mod Paradise</title>
     <meta name="description" content="Bubble Bot - FMP's exclusive points system with daily rewards">
-    <link rel="icon"
-        href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🫧</text></svg>">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🫧</text></svg>">
     <link rel="stylesheet" href="styles.css">
 </head>
-
 <body>
-    <div class="container">
-        <!-- Header -->
-        <header class="header">
-            <div class="container">
-                <div class="logo-section">
-                    <span class="logo">🫧</span>
-                    <div>
-                        <h1>Bubble Bot</h1>
-                        <p class="tagline">Flame Mod Paradise</p>
-                    </div>
+    <!-- Header -->
+    <header>
+        <nav class="container">
+            <a href="/" class="logo">
+                <span class="logo-icon">🫧</span>
+                <div class="logo-text">
+                    <h1>Bubble Bot</h1>
+                    <span>Flame Mod Paradise</span>
                 </div>
-                <div class="status-badge offline" id="statusBadge">
+            </a>
+            
+            <div class="nav-actions">
+                <div class="status-indicator">
                     <span class="status-dot" id="statusDot"></span>
-                    <span id="statusText">OFFLINE</span>
+                    <span class="status-text" id="statusText">Checking...</span>
                 </div>
-            </div>
-        </header>
-
-        <!-- Important Notice Banner -->
-        <div class="notice-banner">
-            <span class="notice-icon">📢</span>
-            <p><strong>Bot Schedule:</strong> Bubble Bot activates every 100 members milestone! Website claims available
-                24/7.</p>
-        </div>
-
-        <!-- Premium Services Ad -->
-        <section class="premium-services">
-            <h2 class="services-title">Premium Services Available</h2>
-            <div class="services-slider-wrapper">
-                <div class="services-slider-track">
-                    <div class="services-grid">
-                        <div class="service-card">
-                            <span class="service-icon">🍪</span>
-                            <h3>Premium Cookies</h3>
-                            <p>High-quality verified cookies for all platforms</p>
-                        </div>
-                        <div class="service-card">
-                            <span class="service-icon">✅</span>
-                            <h3>Cookie Checker</h3>
-                            <p>Professional cookie validation tools</p>
-                        </div>
-                        <div class="service-card">
-                            <span class="service-icon">🛠️</span>
-                            <h3>Custom Tools</h3>
-                            <p>Tailored automation solutions</p>
-                        </div>
-                        <div class="service-card">
-                            <span class="service-icon">🤖</span>
-                            <h3>Bot Development</h3>
-                            <p>Custom Telegram & Discord bots</p>
-                        </div>
-                    </div>
-                </div>
-                <!-- Navigation arrows will be added by JavaScript -->
-                <button class="slider-arrow prev" aria-label="Previous slide"></button>
-                <button class="slider-arrow next" aria-label="Next slide"></button>
-            </div>
-            <!-- Dots will be added by JavaScript -->
-            <div class="slider-dots">
-                <button class="slider-dot active" aria-label="Go to slide 1"></button>
-                <button class="slider-dot" aria-label="Go to slide 2"></button>
-                <button class="slider-dot" aria-label="Go to slide 3"></button>
-                <button class="slider-dot" aria-label="Go to slide 4"></button>
-            </div>
-            <div class="services-cta">
-                <a href="https://flamemodparadise.github.io/My-Site/" target="_blank" class="cta-button">
-                    Browse All Items →
+                
+                <a href="https://discord.gg/WVq522fsr3" target="_blank" class="btn-secondary">
+                    Join Discord
                 </a>
             </div>
-            <!-- <div class="scroll-indicator">
-                <span class="scroll-text">Scroll Down</span>
-                <div class="scroll-arrow"></div>
-            </div> -->
-        </section>
+        </nav>
+    </header>
 
-        <!-- Live Statistics -->
-        <section class="stats-grid">
-            <div class="stat-card">
-                <span class="stat-icon">👥</span>
-                <div>
-                    <span class="stat-value" id="totalUsers">-</span>
-                    <span class="stat-label">Registered Users</span>
-                </div>
-            </div>
-            <div class="stat-card">
-                <span class="stat-icon">💰</span>
-                <div>
-                    <span class="stat-value" id="totalPoints">-</span>
-                    <span class="stat-label">Total Points Distributed</span>
-                </div>
-            </div>
-            <div class="stat-card">
-                <span class="stat-icon">🎁</span>
-                <div>
-                    <span class="stat-value" id="totalCookies">-</span>
-                    <span class="stat-label">Successful Claims</span>
-                </div>
-            </div>
-            <div class="stat-card">
-                <span class="stat-icon">🔥</span>
-                <div>
-                    <span class="stat-value" id="activeToday">-</span>
-                    <span class="stat-label">Active Today</span>
-                </div>
-            </div>
-        </section>
-
-        <!-- Daily Points Claim Section -->
-        <section class="claim-card">
-            <h2>🎁 Claim Your Daily Points</h2>
-
-            <!-- Success/Error Messages Container -->
-            <div id="feedbackContainer" class="feedback-container hidden">
-                <div class="feedback-message" id="feedbackMessage">
-                    <!-- Dynamic content will appear here -->
-                </div>
-            </div>
-
-            <!-- Cooldown Timer -->
-            <div class="cooldown-timer hidden" id="cooldownTimer">
-                <div class="timer-icon">⏰</div>
-                <div class="timer-content">
-                    <p class="timer-label">Next claim available in:</p>
-                    <p class="timer-display" id="timerDisplay">00:00:00</p>
-                </div>
-            </div>
-
-            <!-- Points Information -->
-            <div class="points-info-grid">
-                <div class="info-item">
-                    <span class="info-icon">💎</span>
-                    <span class="info-text"><strong>2 Points</strong> per claim (Website only)</span>
-                </div>
-                <div class="info-item">
-                    <span class="info-icon">⚡</span>
-                    <span class="info-text"><strong>Up to 20+ Points</strong> if you have roles and use Discord Bubble
-                        Bot</span>
-                </div>
-            </div>
-
-            <!-- Critical Warning -->
-            <div class="critical-warning">
-                <div class="warning-header">
-                    <span class="warning-icon">⚠️</span>
-                    <span class="warning-title">IMPORTANT - READ BEFORE CLAIMING</span>
-                </div>
-                <ul class="warning-list">
-                    <li>Enter YOUR Discord ID only (15-25 digit number)</li>
-                    <li>Wrong ID = Points go to another user permanently</li>
-                    <li>You'll still get 24-hour cooldown even with wrong ID</li>
-                    <li>We CANNOT reverse or transfer mistaken claims</li>
-                    <li>Double-check your ID before submitting!</li>
-                </ul>
-            </div>
-
-            <!-- Claim Form -->
-            <form id="claimForm" class="claim-form">
-                <div class="form-group">
-                    <label for="userId" class="form-label">
-                        Your Discord User ID
-                        <span class="label-hint">(Settings → Advanced → Developer Mode → Right-click your name)</span>
-                    </label>
-                    <input type="text" id="userId" class="form-input" placeholder="Example: 823456789012345678"
-                        maxlength="25" pattern="[0-9]{15,25}" required autocomplete="off" spellcheck="false">
-                    <div class="input-helper">
-                        <span id="inputStatus" class="input-status"></span>
-                        <span id="charCount" class="char-count">0/15-25</span>
+    <!-- Hero Section -->
+    <section class="hero">
+        <div class="container">
+            <div class="hero-content">
+                <h2 class="hero-title">Daily Points System</h2>
+                <p class="hero-subtitle">Claim your daily rewards and compete on the leaderboard</p>
+                
+                <!-- Quick Stats -->
+                <div class="stats-row">
+                    <div class="stat-item">
+                        <span class="stat-value" id="totalUsers">0</span>
+                        <span class="stat-label">Users</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-value" id="totalPoints">0</span>
+                        <span class="stat-label">Points Given</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-value" id="activeToday">0</span>
+                        <span class="stat-label">Active Today</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-value" id="totalCookies">0</span>
+                        <span class="stat-label">Total Claims</span>
                     </div>
                 </div>
+            </div>
+        </div>
+    </section>
 
-                <button type="submit" id="claimButton" class="claim-button-premium">
-                    <div class="button-glow"></div>
-                    <div class="button-content">
-                        <span id="buttonIcon" class="button-icon">💎</span>
-                        <span id="buttonText">CLAIM DAILY REWARD</span>
-                        <span id="spinner" class="spinner hidden"></span>
+    <!-- Main Content -->
+    <main class="container">
+        <!-- Primary Section - Claim & Leaderboard -->
+        <div class="primary-grid">
+            <!-- Claim Card -->
+            <div class="card">
+                <div class="card-header">
+                    <h3>Daily Reward</h3>
+                    <span class="badge">2 Points</span>
+                </div>
+                
+                <div class="card-content">
+                    <!-- Alert Message -->
+                    <div class="alert alert-info" id="alertBox">
+                        <span class="alert-icon">ℹ️</span>
+                        <div class="alert-content">
+                            <strong>How it works:</strong>
+                            <p>Enter your Discord ID to claim 2 points daily. Discord bot offers up to 20 points with role bonuses.</p>
+                        </div>
                     </div>
-                    <div class="button-shimmer"></div>
-                </button>
-            </form>
 
-            <!-- Current Balance Display -->
-            <div id="balanceDisplay" class="balance-display hidden">
-                <p class="balance-label">Your Current Balance:</p>
-                <p class="balance-value" id="balanceValue">0 points</p>
-            </div>
-        </section>
+                    <!-- Timer Display -->
+                    <div class="timer-box hidden" id="timerBox">
+                        <span class="timer-icon">⏰</span>
+                        <div class="timer-content">
+                            <span class="timer-label">Next claim in</span>
+                            <span class="timer-value" id="timerValue">00:00:00</span>
+                        </div>
+                    </div>
 
-        <!-- Leaderboard Section -->
-        <section class="leaderboard-section">
-            <div class="section-header">
-                <h2>🏆 Top Players</h2>
-                <span class="section-badge">Live Rankings</span>
-            </div>
-            <div class="leaderboard" id="leaderboard">
-                <div class="leaderboard-loading">
-                    <div class="loading-spinner"></div>
-                    <p>Loading rankings...</p>
+                    <!-- Claim Form -->
+                    <form id="claimForm" class="claim-form">
+                        <div class="form-group">
+                            <label for="userId">Discord User ID</label>
+                            <input 
+                                type="text" 
+                                id="userId" 
+                                class="form-input" 
+                                placeholder="e.g., 823456789012345678"
+                                maxlength="25"
+                                required
+                            >
+                            <span class="form-help">
+                                <span id="charCount">0/15-25</span>
+                            </span>
+                        </div>
+                        
+                        <button type="submit" class="btn-primary" id="claimButton">
+                            <span id="buttonText">Claim Daily Points</span>
+                            <span class="spinner hidden" id="spinner"></span>
+                        </button>
+                    </form>
+
+                    <!-- Balance Display -->
+                    <div class="balance-box hidden" id="balanceBox">
+                        <span class="balance-label">Your Balance</span>
+                        <span class="balance-value" id="balanceValue">0 points</span>
+                    </div>
                 </div>
             </div>
-        </section>
 
-        <!-- Features Grid -->
+            <!-- Leaderboard -->
+            <div class="card">
+                <div class="card-header">
+                    <h3>Top Players</h3>
+                    <span class="badge badge-live">Live</span>
+                </div>
+                <div class="card-content">
+                    <div class="leaderboard" id="leaderboard">
+                        <div class="loading">Loading...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Features Section -->
         <section class="features-section">
-            <h2 class="section-title">✨ Bot Features</h2>
+            <h3 class="section-title">Bot Features & Rewards</h3>
+            
             <div class="features-grid">
-                <div class="feature-card">
-                    <div class="feature-header">
-                        <span class="feature-icon">🎮</span>
-                        <h3>Mini Games</h3>
+                <!-- Mini Games -->
+                <div class="card compact">
+                    <div class="card-header">
+                        <h4>🎮 Mini Games</h4>
                     </div>
-                    <ul class="feature-list">
-                        <li><span class="list-icon">🎰</span> Slot Machine - Test your luck</li>
-                        <li><span class="list-icon">🎲</span> Number Betting - Predict & win</li>
-                        <li><span class="list-icon">💰</span> Rob System - Risk vs reward</li>
-                        <li><span class="list-icon">⚡</span> Divine Gamble - High stakes</li>
-                        <li><span class="list-icon">🎉</span> Giveaway - Point Giveaway</li>
-                    </ul>
+                    <div class="card-content">
+                        <ul class="feature-list">
+                            <li>🎰 Slot Machine</li>
+                            <li>🎲 Number Betting</li>
+                            <li>💰 Rob System</li>
+                            <li>⚡ Divine Gamble</li>
+                            <li>🎉 Point Giveaways</li>
+                        </ul>
+                    </div>
                 </div>
 
-                <div class="feature-card">
-                    <div class="feature-header">
-                        <span class="feature-icon">🍪</span>
-                        <h3>Premium Cookies</h3>
+                <!-- Role Bonuses -->
+                <div class="card compact">
+                    <div class="card-header">
+                        <h4>💎 Discord Role Bonuses</h4>
                     </div>
-                    <ul class="feature-list">
-                        <li><span class="list-icon">📺</span> Netflix Premium Access</li>
-                        <li><span class="list-icon">🎵</span> Spotify Premium Account</li>
-                        <li><span class="list-icon">🤖</span> ChatGPT Plus Access</li>
-                        <li><span class="list-icon">🎬</span> Prime Video</li>
-                        <li><span class="list-icon">💬</span> Claude AI Access</li>
-                        <li><span class="list-icon">🛡️</span> Surfshark VPN</li>
-                        <li><span class="list-icon">🌐</span> <a href="https://flamemodparadise.github.io/My-Site/"
-                                target="_blank">+15 More Sites</a></li>
-                    </ul>
+                    <div class="card-content">
+                        <div class="role-list-compact">
+                            <div class="role-row">
+                                <span>🆓 Free User</span>
+                                <span class="points">+0 pts</span>
+                            </div>
+                            <div class="role-row">
+                                <span>💜 Premium</span>
+                                <span class="points">+5 pts</span>
+                            </div>
+                            <div class="role-row">
+                                <span>👑 VIP</span>
+                                <span class="points">+10 pts</span>
+                            </div>
+                            <div class="role-row">
+                                <span>⭐ Elite</span>
+                                <span class="points">+20 pts</span>
+                            </div>
+                            <div class="role-row">
+                                <span>🛡️ Staff</span>
+                                <span class="points">+5 pts</span>
+                            </div>
+                            <div class="role-row">
+                                <span>🚀 Booster</span>
+                                <span class="points">+3 pts</span>
+                            </div>
+                        </div>
+                        <p class="small-note">*Bonuses apply only with Discord bot</p>
+                    </div>
                 </div>
 
-                <div class="feature-card">
-                    <div class="feature-header">
-                        <span class="feature-icon">💎</span>
-                        <h3>Discord Role Bonuses</h3>
+                <!-- Premium Cookies -->
+                <div class="card compact">
+                    <div class="card-header">
+                        <h4>🍪 Premium Cookies</h4>
                     </div>
-                    <ul class="feature-list">
-                        <li><span class="list-icon">🆓</span> <strong>Free:</strong> +0 daily points</li>
-                        <li><span class="list-icon">💜</span> <strong>Premium:</strong> +5 daily points</li>
-                        <li><span class="list-icon">👑</span> <strong>VIP:</strong> +10 daily points</li>
-                        <li><span class="list-icon">⭐</span> <strong>Elite:</strong> +20 daily points</li>
-                        <li><span class="list-icon">🛡️</span> <strong>Staff:</strong> +5 daily points</li>
-                        <li><span class="list-icon">🚀</span> <strong>Booster:</strong> +3 daily points</li>
-                    </ul>
-                    <p class="role-note">* Role bonuses only apply when using Discord Bubble Bot, not website claims</p>
+                    <div class="card-content">
+                        <div class="cookies-list">
+                            <span class="cookie-tag">Netflix</span>
+                            <span class="cookie-tag">Spotify</span>
+                            <span class="cookie-tag">ChatGPT+</span>
+                            <span class="cookie-tag">Prime Video</span>
+                            <span class="cookie-tag">Claude AI</span>
+                            <span class="cookie-tag">Discord Nitro</span>
+                            <span class="cookie-tag">Canva Pro</span>
+                            <span class="cookie-tag">Surfshark</span>
+                            <span class="cookie-tag">+15 more</span>
+                        </div>
+                        <a href="https://flamemodparadise.github.io/My-Site/" target="_blank" class="btn-accent">
+                            View All Products →
+                        </a>
+                    </div>
                 </div>
             </div>
         </section>
 
-        <!-- Footer -->
-        <footer class="footer">
-            <div class="footer-content">
-                <div class="footer-links">
-                    <a href="https://discord.gg/WVq522fsr3" target="_blank" class="footer-link">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-                            <path
-                                d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515a.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0a12.64 12.64 0 0 0-.617-1.25a.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057a19.9 19.9 0 0 0 5.993 3.03a.078.078 0 0 0 .084-.028a14.09 14.09 0 0 0 1.226-1.994a.076.076 0 0 0-.041-.106a13.107 13.107 0 0 1-1.872-.892a.077.077 0 0 1-.008-.128a10.2 10.2 0 0 0 .372-.292a.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127a12.299 12.299 0 0 1-1.873.892a.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028a19.839 19.839 0 0 0 6.002-3.03a.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419c0-1.333.956-2.419 2.157-2.419c1.21 0 2.176 1.096 2.157 2.42c0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419c0-1.333.955-2.419 2.157-2.419c1.21 0 2.176 1.096 2.157 2.42c0 1.333-.946 2.418-2.157 2.418z" />
-                        </svg>
-                        <span>Join Discord</span>
-                    </a>
-                    <a href="https://t.me/flamemodparadiseofficial" target="_blank" class="footer-link">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-                            <path
-                                d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.894 8.221l-1.97 9.28c-.145.658-.537.818-1.084.508l-3-2.21-1.446 1.394c-.14.18-.357.295-.6.295-.002 0-.003 0-.005 0l.213-3.054 5.56-5.022c.24-.213-.054-.334-.373-.121L8.32 13.617l-2.96-.924c-.64-.203-.658-.64.135-.954l11.566-4.458c.538-.196 1.006.128.832.941z" />
-                        </svg>
-                        <span>Telegram Channel</span>
-                    </a>
+        <!-- Bottom Section -->
+        <div class="bottom-grid">
+            <!-- Shop CTA -->
+            <div class="card">
+                <div class="card-content cta-content">
+                    <div class="cta-icon">🛍️</div>
+                    <div class="cta-text">
+                        <h3>Visit Our Full Shop</h3>
+                        <p>Browse complete catalog with prices, descriptions, and customer reviews</p>
+                        <a href="https://flamemodparadise.github.io/My-Site/" target="_blank" class="btn-primary shop-btn">
+                            <span class="shop-btn-text">OPEN SHOP</span>
+                            <span class="shop-btn-icon">🛒</span>
+                        </a>
+                    </div>
                 </div>
-                <p class="footer-copyright">&copy; 2024 Flame Mod Paradise. All rights reserved.</p>
             </div>
-        </footer>
-    </div>
+
+            <!-- Community Links -->
+            <div class="card">
+                <div class="card-content">
+                    <h4>Join Our Community</h4>
+                    <p class="community-desc">Connect with our members and get support</p>
+                    
+                    <div class="community-links">
+                        <a href="https://discord.gg/WVq522fsr3" target="_blank" class="community-link">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515a.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0a12.64 12.64 0 0 0-.617-1.25a.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057a19.9 19.9 0 0 0 5.993 3.03a.078.078 0 0 0 .084-.028a14.09 14.09 0 0 0 1.226-1.994a.076.076 0 0 0-.041-.106a13.107 13.107 0 0 1-1.872-.892a.077.077 0 0 1-.008-.128a10.2 10.2 0 0 0 .372-.292a.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127a12.299 12.299 0 0 1-1.873.892a.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028a19.839 19.839 0 0 0 6.002-3.03a.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419c0-1.333.956-2.419 2.157-2.419c1.21 0 2.176 1.096 2.157 2.42c0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419c0-1.333.955-2.419 2.157-2.419c1.21 0 2.176 1.096 2.157 2.42c0 1.333-.946 2.418-2.157 2.418z"/>
+                            </svg>
+                            <span>Discord Server</span>
+                        </a>
+                        <a href="https://t.me/flamemodparadiseofficial" target="_blank" class="community-link">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.894 8.221l-1.97 9.28c-.145.658-.537.818-1.084.508l-3-2.21-1.446 1.394c-.14.18-.357.295-.6.295-.002 0-.003 0-.005 0l.213-3.054 5.56-5.022c.24-.213-.054-.334-.373-.121L8.32 13.617l-2.96-.924c-.64-.203-.658-.64.135-.954l11.566-4.458c.538-.196 1.006.128.832.941z"/>
+                            </svg>
+                            <span>Telegram Channel</span>
+                        </a>
+                    </div>
+                    
+                    <div class="community-features">
+                        <span class="comm-feature">💬 Get Support</span>
+                        <span class="comm-feature">🎁 Daily Rewards</span>
+                        <span class="comm-feature">🍪 Cookie Drops</span>
+                        <span class="comm-feature">📢 Updates</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Footer -->
+    <footer>
+        <div class="container">
+            <p>&copy; 2024 Flame Mod Paradise. All rights reserved.</p>
+        </div>
+    </footer>
 
     <script src="script.js"></script>
 </body>
-
 </html>
