@@ -12,16 +12,18 @@
     <div class="container">
         <!-- Header -->
         <header class="header">
-            <div class="logo-section">
-                <span class="logo">🫧</span>
-                <div>
-                    <h1>Bubble Bot</h1>
-                    <p class="tagline">Flame Mod Paradise</p>
+            <div class="container">
+                <div class="logo-section">
+                    <span class="logo">🫧</span>
+                    <div>
+                        <h1>Bubble Bot</h1>
+                        <p class="tagline">Flame Mod Paradise</p>
+                    </div>
                 </div>
-            </div>
-            <div class="status-badge offline" id="statusBadge">
-                <span class="status-dot" id="statusDot"></span>
-                <span id="statusText">OFFLINE</span>
+                <div class="status-badge offline" id="statusBadge">
+                    <span class="status-dot" id="statusDot"></span>
+                    <span id="statusText">OFFLINE</span>
+                </div>
             </div>
         </header>
 
@@ -66,7 +68,7 @@
         <section class="claim-card">
             <h2>🎁 Daily Points Claim</h2>
             
-            <div class="claim-timer" id="claimTimer" style="display:none;">
+            <div class="claim-timer hidden" id="claimTimer">
                 Next: <span class="timer-value" id="timerValue">00:00:00</span>
             </div>
             
@@ -99,10 +101,11 @@
 
                 <button type="submit" id="claimButton" class="claim-button">
                     <span id="buttonText">CLAIM DAILY POINTS</span>
+                    <span id="spinner" class="hidden">⏳</span>
                 </button>
             </form>
 
-            <div id="claimResult"></div>
+            <div id="claimResult" class="result-box hidden"></div>
         </section>
 
         <!-- Leaderboard -->

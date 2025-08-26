@@ -1,4 +1,4 @@
-// Bubble Bot - Optimized JavaScript
+// Bubble Bot - Fixed JavaScript
 
 // Configuration
 const CONFIG = {
@@ -26,16 +26,17 @@ async function init() {
     loadSavedId();
     setupEventListeners();
     await updateStatus();
-    startAutoUpdate();
+    // Removed auto-update - only updates on page refresh
 }
 
 // Cache DOM elements for better performance
 function cacheElements() {
     elements.statusDot = document.getElementById('statusDot');
     elements.statusText = document.getElementById('statusText');
+    elements.statusBadge = document.getElementById('statusBadge');
     elements.totalUsers = document.getElementById('totalUsers');
     elements.totalPoints = document.getElementById('totalPoints');
-    elements.totalClaims = document.getElementById('totalClaims');
+    elements.totalCookies = document.getElementById('totalCookies');
     elements.activeToday = document.getElementById('activeToday');
     elements.leaderboard = document.getElementById('leaderboard');
     elements.claimForm = document.getElementById('claimForm');
@@ -46,7 +47,6 @@ function cacheElements() {
     elements.claimResult = document.getElementById('claimResult');
     elements.claimTimer = document.getElementById('claimTimer');
     elements.timerValue = document.getElementById('timerValue');
-    elements.lastUpdate = document.getElementById('lastUpdate');
 }
 
 // Load saved Discord ID
@@ -76,7 +76,9 @@ function setupEventListeners() {
 // Validate Discord ID
 function validateId(id) {
     const isValid = /^[0-9]{17,20}$/.test(id);
-    elements.userId.classList.toggle('error', !isValid && id.length > 0);
+    if (elements.userId) {
+        elements.userId.classList.toggle('error', !isValid && id.length > 0);
+    }
     return isValid;
 }
 
@@ -84,8 +86,9 @@ function validateId(id) {
 async function updateStatus() {
     try {
         const response = await fetch(`${CONFIG.API_BASE}/status`);
-        const data = await response.json();
+        if (!response.ok) throw new Error('Status fetch failed');
         
+        const data = await response.json();
         updateUI(data);
         updateLeaderboard(data.leaderboard || []);
         
@@ -100,23 +103,19 @@ function updateUI(data) {
     // Bot status
     state.isOnline = data.online || false;
     
-    if (elements.statusDot && elements.statusText) {
-        elements.statusDot.className = `status-dot ${state.isOnline ? 'online' : 'offline'}`;
+    if (elements.statusBadge && elements.statusDot && elements.statusText) {
+        const statusClass = state.isOnline ? 'online' : 'offline';
+        elements.statusBadge.className = `status-badge ${statusClass}`;
+        elements.statusDot.className = `status-dot ${statusClass}`;
         elements.statusText.textContent = state.isOnline ? 'ONLINE' : 'OFFLINE';
-        elements.statusText.style.color = state.isOnline ? '#3BA55C' : '#ED4245';
     }
     
     // Stats
     if (data.stats) {
         updateStat('totalUsers', data.stats.users);
         updateStat('totalPoints', data.stats.points);
-        updateStat('totalClaims', data.stats.cookies);
+        updateStat('totalCookies', data.stats.cookies);
         updateStat('activeToday', data.stats.active);
-    }
-    
-    // Update time
-    if (elements.lastUpdate) {
-        elements.lastUpdate.textContent = new Date().toLocaleTimeString();
     }
 }
 
@@ -130,10 +129,10 @@ function updateStat(id, value) {
 // Set offline status
 function setOfflineStatus() {
     state.isOnline = false;
-    if (elements.statusDot && elements.statusText) {
+    if (elements.statusBadge && elements.statusDot && elements.statusText) {
+        elements.statusBadge.className = 'status-badge offline';
         elements.statusDot.className = 'status-dot offline';
         elements.statusText.textContent = 'OFFLINE';
-        elements.statusText.style.color = '#ED4245';
     }
 }
 
@@ -174,7 +173,7 @@ async function handleClaim(e) {
     const userId = elements.userId.value.trim();
     
     if (!validateId(userId)) {
-        showResult('error', 'Invalid Discord ID format!');
+        showResult('error', 'Invalid Discord ID format! Must be 17-20 digits.');
         return;
     }
     
@@ -209,15 +208,25 @@ async function handleClaim(e) {
 
 // Set loading state
 function setLoadingState(loading) {
-    elements.claimButton.disabled = loading;
-    elements.buttonText.textContent = loading ? 'CLAIMING...' : 'CLAIM DAILY POINTS';
-    elements.spinner.classList.toggle('hidden', !loading);
+    if (elements.claimButton) {
+        elements.claimButton.disabled = loading;
+    }
+    if (elements.buttonText) {
+        elements.buttonText.textContent = loading ? 'CLAIMING...' : 'CLAIM DAILY POINTS';
+    }
+    if (elements.spinner) {
+        elements.spinner.classList.toggle('hidden', !loading);
+    }
 }
 
 // Handle successful claim
 function handleClaimSuccess(data) {
-    elements.claimButton.classList.add('success');
-    elements.buttonText.textContent = '✅ CLAIMED!';
+    if (elements.claimButton) {
+        elements.claimButton.classList.add('success');
+    }
+    if (elements.buttonText) {
+        elements.buttonText.textContent = '✅ CLAIMED!';
+    }
     
     showResult('success', `
         <strong>🎉 Success!</strong><br>
@@ -231,20 +240,32 @@ function handleClaimSuccess(data) {
     }
     
     setTimeout(() => {
-        elements.claimButton.classList.remove('success');
-        elements.buttonText.textContent = 'CLAIMED TODAY ✓';
+        if (elements.claimButton) {
+            elements.claimButton.classList.remove('success');
+        }
+        if (elements.buttonText) {
+            elements.buttonText.textContent = 'CLAIMED TODAY ✓';
+        }
         updateStatus();
     }, 3000);
 }
 
 // Handle claim error
 function handleClaimError(data) {
-    elements.claimButton.classList.add('error');
-    elements.buttonText.textContent = '❌ ERROR';
+    if (elements.claimButton) {
+        elements.claimButton.classList.add('error');
+    }
+    if (elements.buttonText) {
+        elements.buttonText.textContent = '❌ ERROR';
+    }
     
     setTimeout(() => {
-        elements.claimButton.classList.remove('error');
-        elements.buttonText.textContent = 'CLAIM DAILY POINTS';
+        if (elements.claimButton) {
+            elements.claimButton.classList.remove('error');
+        }
+        if (elements.buttonText) {
+            elements.buttonText.textContent = 'CLAIM DAILY POINTS';
+        }
     }, 3000);
     
     const error = data.error || 'Unknown error';
@@ -266,6 +287,8 @@ function handleClaimError(data) {
 
 // Show result message
 function showResult(type, message) {
+    if (!elements.claimResult) return;
+    
     elements.claimResult.className = `result-box ${type}`;
     elements.claimResult.innerHTML = message;
     elements.claimResult.classList.remove('hidden');
@@ -281,6 +304,8 @@ function startCooldownTimer(nextClaim) {
         clearInterval(state.cooldownTimer);
     }
     
+    if (!elements.claimTimer || !elements.timerValue) return;
+    
     elements.claimTimer.classList.remove('hidden');
     
     const updateTimer = () => {
@@ -290,7 +315,9 @@ function startCooldownTimer(nextClaim) {
         if (timeLeft <= 0) {
             clearInterval(state.cooldownTimer);
             elements.claimTimer.classList.add('hidden');
-            elements.buttonText.textContent = 'CLAIM DAILY POINTS';
+            if (elements.buttonText) {
+                elements.buttonText.textContent = 'CLAIM DAILY POINTS';
+            }
             return;
         }
         
@@ -304,11 +331,6 @@ function startCooldownTimer(nextClaim) {
     
     updateTimer();
     state.cooldownTimer = setInterval(updateTimer, 1000);
-}
-
-// Start auto-update
-function startAutoUpdate() {
-    setInterval(updateStatus, CONFIG.UPDATE_INTERVAL);
 }
 
 // Utility functions
