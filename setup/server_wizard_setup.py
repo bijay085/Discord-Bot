@@ -8,8 +8,32 @@ from dotenv import load_dotenv
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Dict, List
+import functools
+import backoff
+import aiohttp
 
 load_dotenv('setup/.env')
+
+def retry_on_connection_error(func):
+    @functools.wraps(func)
+    async def wrapper(*args, **kwargs):
+        max_retries = 3
+        retry_delay = 5
+        
+        for attempt in range(max_retries):
+            try:
+                return await func(*args, **kwargs)
+            except (aiohttp.ClientError, discord.ConnectionClosed) as e:
+                if attempt == max_retries - 1:
+                    raise
+                print(f"Connection error: {e}, retrying in {retry_delay}s... (Attempt {attempt + 1}/{max_retries})")
+                await asyncio.sleep(retry_delay)
+            except discord.HTTPException as e:
+                if attempt == max_retries - 1:
+                    raise
+                print(f"HTTP error: {e}, retrying in {retry_delay}s... (Attempt {attempt + 1}/{max_retries})")
+                await asyncio.sleep(retry_delay)
+    return wrapper
 
 class SetupWizardBot(commands.Bot):
     def __init__(self):
@@ -21,6 +45,51 @@ class SetupWizardBot(commands.Bot):
         )
         self.db = None
         self.config = None
+        self._session = None
+        self._closed = False
+        
+    async def start(self, *args, **kwargs):
+        retry_count = 0
+        max_retries = 3
+        
+        while retry_count < max_retries:
+            try:
+                self._session = aiohttp.ClientSession()
+                await super().start(*args, **kwargs)
+                break
+            except (aiohttp.ClientError, discord.ConnectionClosed, discord.HTTPException) as e:
+                retry_count += 1
+                if retry_count == max_retries:
+                    print(f"Failed to start after {max_retries} attempts: {e}")
+                    raise
+                print(f"Connection error: {e}, retrying... (Attempt {retry_count}/{max_retries})")
+                if not self._closed and self._session:
+                    await self._session.close()
+                await asyncio.sleep(5)
+            except Exception as e:
+                print(f"Unexpected error: {e}")
+                if not self._closed and self._session:
+                    await self._session.close()
+                raise
+
+    async def close(self):
+        self._closed = True
+        if self._session:
+            await self._session.close()
+        await super().close()
+
+    @retry_on_connection_error
+    async def setup_hook(self):
+        print("🚀 Initializing...")
+        config = await bot.db.config.find_one({"_id": "bot_config"})
+        if not config:
+            print("⚠️ Bot config not found! Run db_setup.py first!")
+            
+        try:
+            synced = await bot.tree.sync()
+            print(f"✅ Synced {len(synced)} slash commands")
+        except Exception as e:
+            print(f"❌ Failed to sync: {e}")
 
 bot = SetupWizardBot()
 
@@ -1076,5 +1145,37 @@ async def help_command(ctx):
     embed.set_footer(text="Cookie Bot v2.1")
     
     await ctx.send(embed=embed)
+
+@bot.hybrid_command(name="servers", description="List all servers the bot is in")
+@commands.is_owner()
+async def servers_command(ctx):
+    embed = discord.Embed(
+        title="🤖 Bot Server List",
+        description=f"Connected to {len(bot.guilds)} servers",
+        color=0x5865f2,
+        timestamp=datetime.now(timezone.utc)
+    )
+    
+    # Sort servers by member count
+    sorted_guilds = sorted(bot.guilds, key=lambda g: g.member_count, reverse=True)
+    
+    server_list = []
+    for guild in sorted_guilds:
+        server_list.append(
+            f"• **{guild.name}** ({guild.id})\n"
+            f"  └ {guild.member_count:,} members"
+        )
+    
+    # Split into pages if too long
+    chunks = [server_list[i:i + 10] for i in range(0, len(server_list), 10)]
+    
+    for i, chunk in enumerate(chunks, 1):
+        embed.add_field(
+            name=f"Page {i}",
+            value="\n".join(chunk),
+            inline=False
+        )
+    
+    await ctx.send(embed=embed, ephemeral=True)
 
 bot.run(BOT_TOKEN)

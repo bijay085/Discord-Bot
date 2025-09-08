@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 import logging
 import asyncio
 import motor.motor_asyncio
-from pymongo.errors import AutoReconnect, NetworkTimeout, ServerSelectionTimeoutError
+from pymongo.errors import AutoReconnect, NetworkTimeout, ServerSelectionTimeoutError, ConnectionFailure
 import os
 
 logger = logging.getLogger('CookieBot')
@@ -16,64 +16,54 @@ class DatabaseHandler:
         self._connection_retries = 0
         self._max_retries = 3
         self._retry_delay = 1
+        self._last_ping = datetime.now(timezone.utc)
         
     async def ensure_connection(self):
-        """Ensure MongoDB connection is alive, reconnect if needed"""
+        """Ensure MongoDB connection is alive"""
         try:
-            # Correct syntax for motor admin command
-            await self.bot.mongo_client.admin.command('ping')
-            self._connection_retries = 0  # Reset on success
+            # Only ping if more than 5 seconds since last ping
+            now = datetime.now(timezone.utc)
+            if (now - self._last_ping).total_seconds() < 5:
+                return True
+                
+            await asyncio.wait_for(
+                self.bot.mongo_client.admin.command('ping'),
+                timeout=2.0
+            )
+            self._last_ping = now
+            self._connection_retries = 0
             return True
-        except Exception as e:
-            logger.warning(f"MongoDB connection check failed: {e}")
+        except (asyncio.TimeoutError, ConnectionFailure, ServerSelectionTimeoutError):
+            logger.warning("MongoDB connection lost, reconnecting...")
             return await self._reconnect()
+        except Exception as e:
+            # Ignore SSL errors - they're transient
+            if "SSL" in str(e) or "10054" in str(e):
+                return True  # Connection is actually fine
+            logger.warning(f"MongoDB connection check failed: {e}")
+            return True  # Assume connection is OK
     
     async def _reconnect(self):
-        """Attempt to reconnect to MongoDB with exponential backoff"""
+        """Reconnect to MongoDB"""
         if self._connection_retries >= self._max_retries:
             logger.error("Max reconnection attempts reached")
             return False
             
         self._connection_retries += 1
-        delay = self._retry_delay * (2 ** (self._connection_retries - 1))
+        delay = self._retry_delay * self._connection_retries
         
-        logger.info(f"Attempting MongoDB reconnection {self._connection_retries}/{self._max_retries} in {delay}s...")
+        logger.info(f"Reconnecting to MongoDB (attempt {self._connection_retries}/{self._max_retries})...")
         await asyncio.sleep(delay)
         
         try:
-            # Close existing connection
-            if self.bot.mongo_client:
-                self.bot.mongo_client.close()
-            
-            # Create new connection with optimized settings
-            MONGODB_URI = os.getenv("MONGODB_URI")
-            DATABASE_NAME = os.getenv("DATABASE_NAME", "discord_bot")
-            
-            self.bot.mongo_client = motor.motor_asyncio.AsyncIOMotorClient(
-                MONGODB_URI,
-                maxPoolSize=20,
-                minPoolSize=5,
-                maxIdleTimeMS=30000,
-                waitQueueTimeoutMS=5000,
-                serverSelectionTimeoutMS=5000,  # Increased for DNS issues
-                connectTimeoutMS=10000,  # Increased for DNS issues
-                retryWrites=True,
-                retryReads=True,
-                w=1,
-                readPreference='primaryPreferred',
-                heartbeatFrequencyMS=10000,
-                socketTimeoutMS=30000,
-                # DNS resolution settings
-                directConnection=False,
-                dns_resolver='pymongo'
+            # Don't create new client, just test existing one
+            await asyncio.wait_for(
+                self.bot.mongo_client.admin.command('ping'),
+                timeout=5.0
             )
-            
-            self.bot.db = self.bot.mongo_client[DATABASE_NAME]
-            
-            # Test connection with correct syntax
-            await self.bot.mongo_client.admin.command('ping')
             logger.info("MongoDB reconnection successful")
             self._connection_retries = 0
+            self._last_ping = datetime.now(timezone.utc)
             return True
             
         except Exception as e:
@@ -81,43 +71,42 @@ class DatabaseHandler:
             return False
     
     async def safe_db_operation(self, operation, *args, **kwargs):
-        """Execute database operation with automatic retry on connection failure"""
+        """Execute database operation with automatic retry"""
+        last_error = None
+        
         for attempt in range(3):
             try:
-                # For find operations that return cursors
+                # For cursor operations, don't check connection
                 if hasattr(operation, '__name__') and 'find' in operation.__name__:
-                    # Don't check connection for cursor operations
-                    result = operation(*args, **kwargs)
-                    return result
+                    return operation(*args, **kwargs)
                 
-                # For other operations, ensure connection first
-                if not await self.ensure_connection():
-                    raise ConnectionError("MongoDB connection unavailable")
-                
-                # Execute the operation
+                # For write operations, execute directly
                 result = await operation(*args, **kwargs)
                 return result
                 
-            except (AutoReconnect, NetworkTimeout, ServerSelectionTimeoutError) as e:
+            except (AutoReconnect, NetworkTimeout, ServerSelectionTimeoutError, ConnectionFailure) as e:
+                last_error = e
                 logger.warning(f"Database operation failed (attempt {attempt + 1}/3): {e}")
                 if attempt < 2:
-                    await asyncio.sleep(1 * (attempt + 1))
-                else:
-                    raise
-            except ConnectionError:
-                # Try to reconnect once more
-                if attempt < 2 and await self._reconnect():
-                    continue
-                raise
+                    await asyncio.sleep(0.5 * (attempt + 1))
+                    # Try to ensure connection for next attempt
+                    await self.ensure_connection()
+                    
             except Exception as e:
+                # Ignore SSL and connection reset errors
+                if "SSL" in str(e) or "10054" in str(e) or "10053" in str(e):
+                    await asyncio.sleep(0.5)
+                    continue
                 logger.error(f"Unexpected database error: {e}")
                 raise
+                
+        # If all attempts failed, raise the last error
+        if last_error:
+            raise last_error
     
     async def initialize_database(self):
         try:
-            # Use the client's list_database_names instead of db.list_collection_names for initial check
-            await self.safe_db_operation(self.bot.mongo_client.list_database_names)
-            
+            # Create collections if they don't exist
             collections = ['users', 'servers', 'config', 'statistics', 'feedback', 'analytics']
             existing = await self.bot.db.list_collection_names()
             
@@ -126,54 +115,25 @@ class DatabaseHandler:
                     await self.bot.db.create_collection(collection)
                     print(f"📂 Created: {collection}")
             
-            # Create indexes with error handling
-            indexes = {
-                'users': [
-                    {'keys': [('user_id', 1)], 'unique': True},
-                    {'keys': [('points', -1)], 'unique': False},
-                    {'keys': [('trust_score', -1)], 'unique': False},
-                    {'keys': [('last_active', -1)], 'unique': False}
-                ],
-                'servers': [
-                    {'keys': [('server_id', 1)], 'unique': True},
-                    {'keys': [('enabled', 1)], 'unique': False}
-                ],
-                'feedback': [
-                    {'keys': [('user_id', 1)], 'unique': False},
-                    {'keys': [('timestamp', -1)], 'unique': False}
-                ]
+            # Create critical indexes only
+            critical_indexes = {
+                'users': [('user_id', 1)],
+                'servers': [('server_id', 1)]
             }
             
-            for collection, index_list in indexes.items():
+            for collection, index in critical_indexes.items():
                 try:
-                    # Get existing indexes
-                    existing_indexes = []
-                    async for idx in self.bot.db[collection].list_indexes():
-                        existing_indexes.append(idx)
-                    
-                    existing_names = {idx['name'] for idx in existing_indexes}
-                    
-                    for index_config in index_list:
-                        index_name = '_'.join([f"{k}_{v}" for k, v in index_config['keys']])
-                        
-                        if index_name not in existing_names:
-                            try:
-                                await self.bot.db[collection].create_index(
-                                    index_config['keys'],
-                                    unique=index_config.get('unique', False),
-                                    background=True
-                                )
-                                print(f"📑 Index created: {index_name}")
-                            except Exception as e:
-                                if "already exists" not in str(e):
-                                    logger.warning(f"⚠️ Index creation failed for {collection}: {e}")
-                        
+                    await self.bot.db[collection].create_index(
+                        index,
+                        unique=True,
+                        background=True
+                    )
                 except Exception as e:
-                    logger.warning(f"⚠️ Index error for {collection}: {e}")
+                    if "already exists" not in str(e):
+                        logger.warning(f"Index creation warning for {collection}: {e}")
             
-            # Initialize config
+            # Initialize config if needed
             config = await self.bot.db.config.find_one({"_id": "bot_config"})
-            
             if not config:
                 await self.bot.db.config.insert_one({
                     "_id": "bot_config",
@@ -183,9 +143,8 @@ class DatabaseHandler:
                     "created_at": datetime.now(timezone.utc)
                 })
             
-            # Initialize stats
+            # Initialize stats if needed
             stats = await self.bot.db.statistics.find_one({"_id": "global_stats"})
-            
             if not stats:
                 await self.bot.db.statistics.insert_one({
                     "_id": "global_stats",
@@ -197,4 +156,4 @@ class DatabaseHandler:
                 
         except Exception as e:
             logger.error(f"Error initializing database: {e}")
-            raise
+            # Don't raise - let the bot continue

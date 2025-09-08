@@ -583,8 +583,23 @@ class CookieCog(commands.Cog):
             
             if user_data.get("last_claim"):
                 last_claim = user_data["last_claim"]
-                if last_claim.get("type") == cookie_type:
-                    claim_date = last_claim["date"]
+                
+                # Handle both old format (datetime) and new format (dict)
+                if isinstance(last_claim, datetime):
+                    # Old format - convert to new format
+                    claim_date = last_claim
+                    claim_type = None
+                elif isinstance(last_claim, dict):
+                    # New format
+                    claim_date = last_claim.get("date")
+                    claim_type = last_claim.get("type")
+                else:
+                    # Unknown format - skip cooldown check
+                    claim_date = None
+                    claim_type = None
+                
+                # Check cooldown if we have valid data
+                if claim_date and claim_type == cookie_type:
                     if claim_date.tzinfo is None:
                         claim_date = claim_date.replace(tzinfo=timezone.utc)
                     
@@ -1219,6 +1234,41 @@ class CookieCog(commands.Cog):
                                     f"🎭 {after.mention} lost role {role.mention} with **{role_config.get('name', 'Unknown')}** cookie benefits",
                                     discord.Color.orange()
                                 )
+
+    @commands.hybrid_command(name="fixclaims", description="Fix last_claim data (Owner only)")
+    async def fixclaims(self, ctx):
+        if not await self.is_owner(ctx.author.id):
+            await ctx.send("❌ Owner only!", ephemeral=True)
+            return
+        
+        await ctx.defer()
+        
+        fixed = 0
+        async for user in self.db.users.find({"last_claim": {"$exists": True}}):
+            last_claim = user.get("last_claim")
+            
+            # If last_claim is a datetime, convert to dict format
+            if isinstance(last_claim, datetime):
+                await self.db.users.update_one(
+                    {"user_id": user["user_id"]},
+                    {
+                        "$set": {
+                            "last_claim": {
+                                "date": last_claim,
+                                "type": "unknown",
+                                "feedback_given": False
+                            }
+                        }
+                    }
+                )
+                fixed += 1
+        
+        await ctx.send(f"✅ Fixed {fixed} users' claim data!")
+
+    async def is_owner(self, user_id: int) -> bool:
+        """Check if a user is the bot owner"""
+        config = await self.db.config.find_one({"_id": "bot_config"})
+        return config and config.get("owner_id") == user_id
 
 async def setup(bot):
     await bot.add_cog(CookieCog(bot))

@@ -209,13 +209,25 @@ class FeedbackCog(commands.Cog):
             
             await interaction.followup.send(embed=embed, ephemeral=True)
             
-            # Log the text feedback
+            # Check if screenshot already exists
+            has_screenshot = last_claim.get("screenshot", False)
+
+            # Log the text feedback with correct status
             stars = "⭐" * rating
-            await self.log_action(
-                interaction.guild_id,
-                f"📝 {interaction.user.mention} submitted text feedback for **{last_claim['type']}** cookie {stars} - \"{feedback[:50]}{'...' if len(feedback) > 50 else ''}\" (Photo pending)",
-                discord.Color.gold()
-            )
+            if has_screenshot:
+                # Photo already submitted - feedback is now complete
+                await self.log_action(
+                    interaction.guild_id,
+                    f"🎉 {interaction.user.mention} completed feedback for **{last_claim['type']}** cookie {stars} - \"{feedback[:50]}{'...' if len(feedback) > 50 else ''}\" (Both text and photo submitted!)",
+                    discord.Color.green()
+                )
+            else:
+                # Photo still pending
+                await self.log_action(
+                    interaction.guild_id,
+                    f"📝 {interaction.user.mention} submitted text feedback for **{last_claim['type']}** cookie {stars} - \"{feedback[:50]}{'...' if len(feedback) > 50 else ''}\" (Photo pending)",
+                    discord.Color.gold()
+                )
             
         except discord.NotFound:
             print(f"Interaction expired for user {interaction.user.id}")
@@ -530,21 +542,32 @@ class FeedbackCog(commands.Cog):
                                     embed_description += "\n⚡ Quick feedback bonus earned!"
                                 total_trust = 0.5 * trust_multiplier  # 0.25 + 0.25
                                 
-                                # Log complete feedback
-                                stars = "⭐" * last_claim.get("rating", 0)
-                                feedback_text = last_claim.get('feedback_text', '')[:50]
-                                if len(last_claim.get('feedback_text', '')) > 50:
-                                    feedback_text += "..."
-                                
-                                log_message = f"🎉 {message.author.mention} completed feedback for **{cookie_type}** cookie with screenshot {stars} - \"{feedback_text}\""
-                                if quick_feedback_bonus > 0:
-                                    log_message += " ⚡ +0.5 quick bonus!"
-                                
-                                await self.log_action(
-                                    message.guild.id,
-                                    log_message,
-                                    discord.Color.green()
-                                )
+                                # Check if text feedback already exists
+                                has_text_feedback = last_claim.get("rating") is not None
+
+                                if has_text_feedback:
+                                    # Complete feedback (text was submitted first)
+                                    stars = "⭐" * last_claim.get("rating", 0)
+                                    feedback_text = last_claim.get('feedback_text', '')[:50]
+                                    if len(last_claim.get('feedback_text', '')) > 50:
+                                        feedback_text += "..."
+                                    
+                                    log_message = f"🎉 {message.author.mention} completed feedback for **{cookie_type}** cookie with screenshot {stars}"
+                                    if feedback_text:
+                                        log_message += f" - \"{feedback_text}\""
+                                    
+                                    await self.log_action(
+                                        message.guild.id,
+                                        log_message,
+                                        discord.Color.green()
+                                    )
+                                else:
+                                    # Only screenshot (no text yet)
+                                    await self.log_action(
+                                        message.guild.id,
+                                        f"📸 {message.author.mention} submitted screenshot for **{cookie_type}** cookie (Text feedback pending)",
+                                        discord.Color.gold()
+                                    )
                             else:
                                 # Only screenshot (no text yet)
                                 await self.db.users.update_one(

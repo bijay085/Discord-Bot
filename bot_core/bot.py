@@ -86,28 +86,37 @@ class CookieBot(commands.Bot):
         try:
             self.mongo_client = motor.motor_asyncio.AsyncIOMotorClient(
                 MONGODB_URI,
-                maxPoolSize=20,  # Reduced from 40
-                minPoolSize=5,   # Reduced from 7
-                maxIdleTimeMS=30000,  # Reduced from 45000
-                waitQueueTimeoutMS=5000,  # Reduced from 10000
-                serverSelectionTimeoutMS=3000,  # Reduced from 5000
-                connectTimeoutMS=5000,  # Reduced from 10000
+                maxPoolSize=5,  # Reduced for Windows stability
+                minPoolSize=1,  # Minimal pool
+                maxIdleTimeMS=10000,  # Close idle connections faster
+                waitQueueTimeoutMS=2500,  # Shorter queue timeout
+                serverSelectionTimeoutMS=5000,
+                connectTimeoutMS=10000,
                 retryWrites=True,
                 retryReads=True,
-                w=1,  # Changed from 'majority' for faster writes
-                readPreference='primaryPreferred',  # Changed from 'nearest'
+                w=1,
+                journal=True,
+                readPreference='primary',  # Use primary only
                 heartbeatFrequencyMS=10000,
-                socketTimeoutMS=30000
+                socketTimeoutMS=20000,
+                maxConnecting=2  # Limit concurrent connection attempts
+                # REMOVED socketKeepAlive - not valid for motor
             )
             
             self.db = self.mongo_client[DATABASE_NAME]
             
-            # Test connection
-            result = await self.mongo_client.admin.command('ping')
+            # Test connection with timeout
+            await asyncio.wait_for(
+                self.mongo_client.admin.command('ping'),
+                timeout=5.0
+            )
             print("✅ MongoDB connected!")
             
             await self.db_handler.initialize_database()
             
+        except asyncio.TimeoutError:
+            logger.error("❌ MongoDB connection timeout!")
+            raise
         except Exception as e:
             logger.error(f"❌ MongoDB connection failed: {e}")
             raise

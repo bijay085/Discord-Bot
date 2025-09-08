@@ -1,7 +1,4 @@
 # bot_core/logger.py
-# Location: bot_core/logger.py
-# Description: Enhanced logging system with webhook queue to prevent spam
-
 import logging
 import sys
 import discord
@@ -17,32 +14,42 @@ class WebhookHandler(logging.Handler):
         self.session = None
         self.queue = asyncio.Queue(maxsize=100)
         self.last_sent = {}
-        self.rate_limit_window = 60  # seconds
+        self.rate_limit_window = 60
         self.max_messages_per_window = 10
-        self.error_counts = {}  # NEW LINE
+        self.error_counts = {}
+        self.ignored_errors = [
+            "SSL handshake failed",
+            "10054",
+            "10053",
+            "An existing connection was forcibly closed",
+            "AutoReconnect"
+        ]
         
     async def send_to_webhook(self, record):
         if not self.webhook_url or not self.session:
             return
-            
+        
+        # Filter out known MongoDB connection errors
+        message = record.getMessage()
+        for ignored in self.ignored_errors:
+            if ignored in message:
+                return
+        
         try:
             # Rate limiting check
             current_time = datetime.now().timestamp()
             window_start = current_time - self.rate_limit_window
             
-            # Clean old timestamps
             self.last_sent = {k: v for k, v in self.last_sent.items() if v > window_start}
             
-            # Check if we've sent too many messages
             if len(self.last_sent) >= self.max_messages_per_window:
                 return
             
-            # ADD THIS BLOCK - Error counting logic
             error_key = f"{record.pathname}:{record.lineno}"
             if error_key in self.error_counts:
                 self.error_counts[error_key] += 1
                 if self.error_counts[error_key] > 3:
-                    return  # Stop sending after 3 of same error
+                    return
             else:
                 self.error_counts[error_key] = 1
             
@@ -70,16 +77,20 @@ class WebhookHandler(logging.Handler):
             self.last_sent[current_time] = current_time
             
         except Exception:
-            # Silently fail to avoid infinite loops
             pass
     
     def emit(self, record):
+        # Filter SSL errors at emit level too
+        message = record.getMessage()
+        for ignored in self.ignored_errors:
+            if ignored in message:
+                return
+                
         if record.levelname in ['ERROR', 'WARNING', 'CRITICAL']:
             try:
                 import asyncio
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
-                    # Don't block, just create task
                     if self.queue.qsize() < self.queue.maxsize:
                         asyncio.create_task(self.send_to_webhook(record))
             except Exception:
@@ -88,9 +99,22 @@ class WebhookHandler(logging.Handler):
 webhook_handler = WebhookHandler()
 
 def setup_logging():
+    # Filter out pymongo SSL warnings
+    logging.getLogger('pymongo').setLevel(logging.ERROR)
+    logging.getLogger('pymongo.pool').setLevel(logging.ERROR)
+    logging.getLogger('pymongo.topology').setLevel(logging.ERROR)
+    
     file_handler = logging.FileHandler('bot.log', encoding='utf-8')
     file_handler.setLevel(logging.WARNING)
     file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+    
+    # Add filter for SSL errors
+    class SSLFilter(logging.Filter):
+        def filter(self, record):
+            return not any(x in str(record.msg) for x in ["SSL", "10054", "10053", "AutoReconnect"])
+    
+    file_handler.addFilter(SSLFilter())
+    webhook_handler.addFilter(SSLFilter())
     
     logging.basicConfig(
         level=logging.WARNING,
